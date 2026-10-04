@@ -1458,6 +1458,27 @@ const treeFor = (E) => compile(HOT_KEY_SRC, { map: { epochLength: SInt(E) } }).t
   }
 }
 
+// Section X contributed by odiseusme in issue #1. X1 PASS means the attack is ACCEPTED: it is why each operator
+// must mint their own authority NFT (README, "Intended deployment"). X2 shows a post can carry its own top-up.
+section("X. REVIEW: cross-operator, shared NFT id");
+{
+  const w = fourWorld({ nft: "shared" });
+  // operator B (= w.attacker) holds a legit NFT unit; plants an authority box with A's owner key in R4, B's key in R6
+  w.authParty.addUTxOs(mockUTxO({ ergoTree: w.companionTree, value: ERG / 10n, creationHeight: H0 - EPOCH,
+    assets: [{ tokenId: COMPANION_NFT, amount: 1n }],
+    additionalRegisters: { R4: SGroupElement(w.owner.key.publicKey).toHex(), R5: bytes(ORACLE_TOKEN).toHex(), R6: SGroupElement(w.attacker.key.publicKey).toHex() } }));
+  const planted = qAuthAll(w).find((b) => b.additionalRegisters.R6 === SGroupElement(w.attacker.key.publicKey).toHex());
+  check("X1 operator B's planted authority box (R4 = A's owner key, R6 = B's key) posts junk into A's oracle box, signed by B only",
+    run(w, qpost(w, planted, qOracle(w, 0), { prices: [1n, 1n] }), [w.attacker]), true);
+}
+{
+  const w = fourWorld({ nft: "shared" });
+  const cb = qAuthAll(w)[0];
+  const fund = w.attacker.utxos.toArray()[0];
+  check("X2 top-up inside a post: extra wallet input, all of it lands in the successor, no owner key",
+    run(w, qpost(w, cb, qOracle(w, 0), { extraInputs: [new ErgoUnsignedInput(fund)], succValue: cb.value + fund.value - POST_FEE }), [w.hot[0], w.attacker]), true);
+}
+
 // ───────────────────────────── Thief ledger ─────────────────────────────
 section("THIEF LEDGER: thief = server hot key + rotated key + attacker wallet; want dERG <= 0 and every dToken <= 0");
 {
