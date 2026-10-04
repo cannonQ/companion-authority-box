@@ -104,3 +104,7 @@ What this showed:
 - **Adoption on an existing pool.** This means a new oracle contract (and new oracle tokens) plus a new refresh contract, introduced through the pool's update mechanism. The pool NFT stays the same. This comes from reading EIP-23 and oracle-core, not from a test against a deployed pool.
 
 Review, attacks and counter-proposals are welcome. Please open an issue.
+
+## License
+
+[AGPL-3.0](LICENSE).

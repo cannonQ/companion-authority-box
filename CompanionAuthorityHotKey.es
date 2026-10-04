@@ -1,105 +1,94 @@
 {
-  // Companion Authority Box — scoped hot-key variant. This is the CHOSEN posting
-  // contract. Its pre-audit form (CompanionAuthorityHotKey.pre-audit.es) was
-  // smoke-tested on mainnet with dummy tokens on 2026-10-03; this audited form
-  // (epochLength guard added) has not been on chain.
+  //////////////////////////////////////////////////////////
+  // CompanionAuthorityHotKey.es — posting authority for one oracle owner
+  //////////////////////////////////////////////////////////
+  // Author: CannonQ (2026)
   //
-  // Diff from spikes/CompanionAuthorityContract.es: the blake2b256 preimage
-  // gate on R6 is replaced by proveDlog of a posting-only key in R6. A
-  // signature commits to the transaction bytes, so it cannot be lifted from
-  // the mempool (or from chain history) onto a different transaction.
+  // Lets an always-online server post datapoints to its owner's oracle boxes
+  // without holding the owner key or any wallet. The box carries an NFT that
+  // OracleContractV2-valuefix.es accepts as its posting authority, the owner key
+  // (kept offline) and a separate posting key. A post is signed with the posting
+  // key, spends one oracle box together with this box, and pays the miner fee out
+  // of this box's ERG. The script fences that key in: ERG and tokens can only go
+  // back into the same two boxes or to the miner, this box may lose at most
+  // maxFeePerEpoch per post, and successive posts are at least epochLength blocks
+  // apart. The posting signature covers the whole transaction, so it cannot be
+  // reused on a different one. The owner key can spend the box in any way.
   //
-  // Target property: whoever steals the hot key can move no ERG and no
-  // tokens to an address of their choosing. The only value that can leave
-  // this box is miner fee, at most maxFeePerEpoch per post. Successive
-  // posts' creation heights step by >= epochLength, so any window of W
-  // blocks holds at most 1 + (W - 1 + mempoolSlack) / epochLength posts
-  // (one per epoch on average; idle epochs do not accumulate). The server
-  // needs no wallet: a post spends only [oracle box, this box] and pays the
-  // fee out of this box.
+  // Box:
+  //   value      nanoERG; the fund that pays post fees. Each post may lower it by
+  //              at most maxFeePerEpoch.
+  //   tokens(0)  the authority NFT; OracleContractV2-valuefix.es knows its id as
+  //              authorityNftId. A post keeps the whole token list unchanged.
+  //   R4 GroupElement  the owner key. It must also be the R4 (owner key) of the
+  //                    oracle box being posted to; the oracle contract checks the
+  //                    same equality from its side. R4 is read on every spend, so a
+  //                    box at this address without a GroupElement R4 (for example
+  //                    a plain ERG top-up) can never be spent.
+  //   R5 Coll[Byte]    the oracle token id: the tokens(0) id that every oracle box
+  //                    in the pool carries. It does not name one oracle box.
+  //   R6 GroupElement  the posting key.
   //
-  // Registers: R4 = owner key (GroupElement), R5 = bound oracle token id
-  //            (Coll[Byte]), R6 = hot key (GroupElement). tokens(0) = NFT.
-  //            Assumption: R4 is ALSO the bound oracle box's R4 (the oracle
-  //            owner key). A post is accepted only against an oracle box
-  //            whose R4 equals this box's R4.
-  //            R5 binds the pool-wide oracle TOKEN id, which every oracle box
-  //            shares; it does not name one oracle box. This box may post to
-  //            any oracle box with that token and R4 = owner, so the rate
-  //            limit is per AUTHORITY box, not per oracle box.
+  // Post (posting key signs):
+  //   inputs       this box, the only input holding its NFT at tokens(0); exactly
+  //                one oracle box (tokens(0) = the R5 id) whose R4 equals this
+  //                box's R4. Further inputs are not refused, but with no change
+  //                output their value can only go to the miner.
+  //   outputs      exactly one successor at this script with the NFT at tokens(0):
+  //                same tokens, same R4/R5/R6, value at most maxFeePerEpoch lower;
+  //                exactly one oracle output with the same script, tokens and value
+  //                as the oracle input; every other output a miner-fee box.
+  //   data inputs  none.
+  //   Checked here: also the successor's creation height, which must be at least
+  //   epochLength above this box's and no more than mempoolSlack below HEIGHT.
+  //   OracleContractV2-valuefix.es, spent alongside, checks from its side that this
+  //   box's script hash equals its authorityScriptHash, that the oracle output sits
+  //   at the same index as the oracle input and keeps R4; it leaves the datapoint
+  //   registers (R5 onward) free for the post to write.
   //
-  // ORACLE SIDE: OracleContractV2-valuefix.es accepts a post only when the
-  // input holding the authority NFT is at THIS script (blake2b256 of its tree
-  // = the oracle's compile constant authorityScriptHash) and has R4 equal to
-  // the oracle box's R4. Compile this contract FIRST and feed its hash to the
-  // oracle; any change here (including epochLength) changes the oracle script.
+  // Owner (owner key signs):
+  //   inputs       this box, plus anything the owner adds.
+  //   outputs      free: send the NFT and ERG to a wallet, recreate the box here
+  //                with a new posting key in R6, or burn the NFT.
+  //   data inputs  none.
+  //   Checked here: only the owner signature, with one catch. If the transaction
+  //   has exactly one output at this script carrying the NFT at tokens(0), this
+  //   box's R5 is read, and a missing or wrong-typed R5 makes the script fail; such
+  //   a box must be reclaimed to a wallet rather than recreated in place.
   //
-  // PATH A: Posting — proveDlog(hotKey) + the exact posting shape below.
-  // PATH B: Owner (cold signature) — proveDlog(R4). Reclaim, rotate, destroy.
-  //
-  // Only R4 is read unconditionally. Every posting-only read sits inside an
-  // `if` branch, which is evaluated lazily. A wrong-typed register read
-  // THROWS, and a throw outside the guard kills PATH B as well (wave 1 L4b:
-  // a box with a non-GroupElement R6 was unspendable even by the owner).
-  // Reclaim and destroy always work. An in-place rotate needs a well-typed
-  // R5: SELF.R5 is read as soon as the tx has exactly one same-script output
-  // carrying the NFT, so a missing or wrong-typed R5 blocks an in-place
-  // rotate even with the cold key (review R1); reclaim such a box instead.
-  //
-  // A post also requires exactly one INPUT holding this box's NFT id at
-  // tokens(0) (this box). Without it, two authority boxes sharing one NFT id
-  // and one hot key could be merged into a single successor and the second
-  // box's ERG would leave as miner fee (probe Q4). The check is a pure filter
-  // inside the posting branch: it cannot throw and never touches PATH B.
-  //
-  // Oracle output registers R5+ are deliberately unpinned; R7 must stay
-  // writable by the post (RefreshContractKeyless.es reads it); a key written
-  // there by a stolen hot key survives a hot-key rotation until that oracle
-  // box is reposted or collected.
-  //
-  // BUILDER RULES (off-chain; the contract cannot enforce them):
-  //  - the posting builder selects oracle boxes by known box id, or validates
-  //    shape first (tokens.size >= 2, tokens(1) = reward id, value >= oracle
-  //    minimum, typed R4 = owner); a malformed box at the oracle script with
-  //    R4 = owner makes the post fail (multi.test.mjs BUILDER RULE rows);
-  //  - the multi builder keeps oracle outputs in input order;
-  //  - owner tooling builds rotates from an explicit input list (authority
-  //    box + plain ERG boxes only).
-  //
-  // KNOWN LIMITS (besides the short-epoch limit at mempoolSlack below):
-  //  - an ERG top-up sent to this address without a typed R4 (GroupElement)
-  //    is unspendable forever: R4 is read unconditionally and throws. Top up
-  //    through an owner rotate instead.
+  // Nuance: because R5 names a pool-wide token, this box may post to any oracle box
+  // with that token and R4 = owner; the posting rate is limited per authority box,
+  // not per oracle box. Neither contract pins the oracle output's R5 onward, so
+  // whatever a post writes there stays until that oracle box is next spent;
+  // changing the posting key does not clear it.
+  //////////////////////////////////////////////////////////
+
+  // Compile-time constant: epochLength: Int — the minimum gap, in blocks, between
+  // the creation heights of successive posts.
 
   val ownerPubKey    = SELF.R4[GroupElement].get
-  // 0.002 ERG = 2x the intended single-box post fee (0.001 ERG). The daemon's
-  // raised post fee (OracleBoxPoster MINER_FEE, 0.003 ERG) is not needed
-  // (operator, 2026-10-03); this is a ceiling, not the fee paid.
+  // 0.002 ERG: the most this box's value may fall across one post, leaving headroom
+  // over a 0.001 ERG single-box fee. It is a ceiling, not the fee paid.
   val maxFeePerEpoch = 2000000L
 
-  // A post stamped s (successor creationHeight = s) can be included in
-  // blocks s .. s+mempoolSlack. The daemon stamps tip-1, so a post built
-  // at tip h lives for blocks h+1 .. h+mempoolSlack-1 (3 blocks here).
-  // Must stay < epochLength (compile constant, 5).
-  // The deployed refresh contract allows a pool epoch as short as 3 blocks
-  // when a refresher back-stamps (AVL pool RefreshContract.es), and a
-  // 5-block lock then misses up to every other epoch (KNOWN LIMIT, probe
-  // T6); under daemon-timed refreshes (6-block epochs) none are missed.
+  // A post whose successor has creation height s can be included in blocks s to
+  // s + mempoolSlack. It must stay below epochLength; the guard before the posting
+  // key is read refuses every post otherwise.
   val mempoolSlack   = 4
 
   // Standard miner-fee proposition (feeProposition(720)); same bytes on
   // mainnet and testnet.
   val minerFeeProp   = fromBase16("1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304")
 
-  // `if`, not `&&`: SELF.tokens(0) throws on a box without tokens (e.g. an
-  // ERG top-up that carries R4), and that throw would kill PATH B.
+  // `if`, not `&&`: SELF.tokens(0) throws on a box without tokens (e.g. an ERG
+  // top-up that carries R4), and that throw would also block the owner path.
   val myNft = if (SELF.tokens.size > 0) SELF.tokens(0)._1 else Coll[Byte]()
 
-  // A successor carries this NFT at tokens(0) AND keeps this script. An
-  // owner reclaim (NFT to a wallet) or a burn never matches, so for those
-  // transactions nothing below is evaluated and PATH B depends on R4 alone.
-  // An owner in-place rotate does match, so it reads SELF.R5 below and needs
-  // a well-typed R5.
+  // A successor carries this NFT at tokens(0) AND keeps this script. An owner
+  // reclaim (NFT to a wallet) or a burn never matches, so for those transactions
+  // nothing in the posting branch runs and the owner path depends on R4 alone. An
+  // owner in-place rewrite does match, so it reads SELF.R5 below and needs a
+  // well-typed R5.
   val successors = OUTPUTS.filter { (b: Box) =>
     b.tokens.size > 0 && b.tokens(0)._1 == myNft &&
     b.propositionBytes == SELF.propositionBytes
@@ -109,18 +98,17 @@
     val successor     = successors(0)
     val oracleTokenId = SELF.R5[Coll[Byte]].get
 
-    // The bound oracle box is spent and recreated exactly once, with the
-    // same script, the same token list and the same value: a value-neutral
-    // pass-through, so no oracle ERG can be skimmed (wave 1 B5a) and no
-    // companion ERG can be parked in it. The token id alone does not
-    // identify the owner's box: where every oracle box shares one token id,
-    // anyone holding a unit can plant a box at the owner's oracle-script
-    // address with their own R4, and a post into it gives them the owner's
-    // datapoint and that epoch's reward (wave 1 C6b, review R2). The oracle
-    // R4 check in the guard below closes this.
+    // The oracle box is spent and recreated exactly once, keeping its script, token
+    // list and value, so a post can neither take ERG out of it nor park this box's
+    // ERG in it. The token id alone does not identify the owner's box: every oracle
+    // box in the pool shares it, so anyone holding a unit could create a box at the
+    // oracle script with their own R4 and collect the owner's datapoint and reward
+    // from a post into it. The oracle R4 check in the guard below refuses that.
     val oracleIns  = INPUTS.filter  { (b: Box) => b.tokens.size > 0 && b.tokens(0)._1 == oracleTokenId }
     val oracleOuts = OUTPUTS.filter { (b: Box) => b.tokens.size > 0 && b.tokens(0)._1 == oracleTokenId }
-    // Exactly one input carries this NFT (this box): closes the Q4 merge.
+    // Exactly one input carries this NFT (this box). Otherwise two authority boxes
+    // sharing one NFT id and posting key could be merged into a single successor,
+    // and the second box's ERG would leave as miner fee.
     val oracleOk = INPUTS.filter { (b: Box) => b.tokens.size > 0 && b.tokens(0)._1 == myNft }.size == 1 &&
                    oracleIns.size == 1 && oracleOuts.size == 1 && {
       val oIn  = oracleIns(0)
@@ -129,42 +117,41 @@
                         oOut.tokens == oIn.tokens &&
                         oOut.value == oIn.value
 
-      // Output rule: besides the successor and the oracle box, every output
-      // is a miner-fee box. There is no change output, so nothing this box
-      // gives up (<= maxFeePerEpoch) can reach an address the signer picks
-      // (wave 1 B5d). Deliberate consequence: an external fee payer cannot
-      // take change, and two posts cannot share one tx (wave 1 D1b, D2).
+      // Besides the successor and the oracle box, every output is a miner-fee box.
+      // With no change output, whatever this box gives up (at most maxFeePerEpoch)
+      // can only reach the miner. It also means an outside fee payer cannot take
+      // change, and two posts cannot share one transaction.
       val onlyFeeElse = OUTPUTS.forall { (b: Box) =>
         b.id == successor.id || b.id == oOut.id || b.propositionBytes == minerFeeProp
       }
       passThrough && onlyFeeElse
     }
 
-    // The full token list is pinned, not just the NFT (wave 1 D4).
+    // The full token list is pinned, not just the NFT.
     val tokensKept = successor.tokens == SELF.tokens
     val valueSafe  = successor.value >= SELF.value - maxFeePerEpoch
 
-    // Height lock tied to HEIGHT (wave 1 E1). Successor creation heights must
-    // step by >= epochLength, AND each must lie in [HEIGHT - mempoolSlack,
-    // HEIGHT]. Without the HEIGHT window an idle box let the key post with
-    // old creation heights back-to-back. `created <= HEIGHT` is also a
-    // consensus rule; it is repeated here so the contract does not rely on it.
+    // Height lock tied to HEIGHT. Successor creation heights must step up by at least
+    // epochLength, AND each must lie in [HEIGHT - mempoolSlack, HEIGHT]. Without the
+    // HEIGHT window an idle box would let the key post back to back with old creation
+    // heights. `created <= HEIGHT` is also a consensus rule; it is repeated here so
+    // the contract does not rely on it.
     val created  = successor.creationInfo._1
     val heightOk = created >= SELF.creationInfo._1 + epochLength &&
                    created <= HEIGHT &&
                    created >= HEIGHT - mempoolSlack
 
-    // R6 (and the successor's typed registers) are read only once the
-    // structural checks pass. Owner transactions without the oracle box stop
-    // above, so a wrong-typed R6 cannot block an owner rotate either.
-    // `epochLength > mempoolSlack`: a lock mis-compiled at or below the slack
-    // (e.g. 0 or 4) would let two posts land at one HEIGHT; with this guard
-    // such a box fails closed (no post at all). PATH B is unaffected.
+    // R6 and the successor's typed registers are read only once the structural
+    // checks pass. Owner transactions without an oracle box stop at the condition,
+    // so a wrong-typed R6 cannot block an owner rewrite either.
+    // `epochLength > mempoolSlack`: a lock compiled at or below the slack would let
+    // two posts land at one HEIGHT; with this test such a box refuses every post.
+    // The owner path is unaffected.
     if (epochLength > mempoolSlack && oracleOk && tokensKept && valueSafe && heightOk) {
       val hotKey = SELF.R6[GroupElement].get
-      // The oracle box must belong to this companion's owner. Assumes the
-      // companion owner key (R4 here) is the same key as the oracle box's
-      // owner key (its R4); an operator using two different keys cannot post.
+      // The oracle box must belong to this box's owner: its R4 must be the same key
+      // as R4 here, so the posting key cannot post to anyone else's oracle box.
+      // The successor keeps R4, R5 and R6 unchanged.
       val regsKept = oracleIns(0).R4[GroupElement].get == ownerPubKey &&
                      successor.R4[GroupElement].get == ownerPubKey &&
                      successor.R5[Coll[Byte]].get == oracleTokenId &&
@@ -173,7 +160,7 @@
     } else sigmaProp(false)
   } else sigmaProp(false)
 
-  // PATH A: posting (hot key signature bound to this exact transaction)
-  // PATH B: owner (cold key — reclaim, rotate the hot key, destroy)
+  // Post: posting-key signature, which covers this exact transaction.
+  // Owner: owner-key signature (reclaim, change the posting key, destroy).
   posting || proveDlog(ownerPubKey)
 }
