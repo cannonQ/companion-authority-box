@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 890" width="1160" height="890" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="#1c2430">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3b4656"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1160" height="890" fill="#ffffff"/>
+  <text x="20" y="34" font-size="20" font-weight="700">How the oracle daemon works: today and in the new model</text>
+  <text x="20" y="54" font-size="12" fill="#5a6676">Same server, same price fetching. What changes is what it signs with and where the fee comes from.</text>
+  <rect x="20" y="70" width="550" height="760" rx="10" fill="#f6f3f2" stroke="#a89a94" stroke-width="1.5"/>
+  <text x="36" y="96" font-size="13" font-weight="700" letter-spacing="1.2" fill="#6b4f45">TODAY</text>
+  <text x="36" y="126" font-size="13" font-weight="700">Secret on the server</text>
+  <rect x="36" y="136" width="518" height="62" rx="8" fill="#fdf1ee" stroke="#c96a5c" stroke-width="2"/>
+  <text x="50" y="160" font-size="14" font-weight="700">Wallet mnemonic, which is also the oracle owner key</text>
+  <text x="50" y="180" font-size="12">signs everything; controls the wallet's ERG and tokens</text>
+  <text x="36" y="230" font-size="13" font-weight="700">Post transaction, every epoch</text>
+  <text x="36" y="250" font-size="11" fill="#5a6676">spends</text>
+  <text x="346" y="250" font-size="11" fill="#5a6676">creates</text>
+  <rect x="36" y="258" width="200" height="34" rx="6" fill="#ffffff" stroke="#a89a94"/>
+  <text x="48" y="280" font-size="12">Oracle box</text>
+  <rect x="36" y="300" width="200" height="34" rx="6" fill="#ffffff" stroke="#a89a94"/>
+  <text x="48" y="322" font-size="12">Wallet box (ERG for the fee)</text>
+  <rect x="346" y="258" width="208" height="34" rx="6" fill="#ffffff" stroke="#a89a94"/>
+  <text x="358" y="280" font-size="12">Oracle box, new prices</text>
+  <rect x="346" y="300" width="208" height="34" rx="6" fill="#ffffff" stroke="#a89a94"/>
+  <text x="358" y="322" font-size="12">Miner fee 0.003 ERG</text>
+  <rect x="346" y="342" width="208" height="34" rx="6" fill="#ffffff" stroke="#a89a94"/>
+  <text x="358" y="364" font-size="12">Change back to the wallet</text>
+  <line x1="244" y1="296" x2="338" y2="296" stroke="#3b4656" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="291" y="318" font-size="11" text-anchor="middle" font-weight="700">signed by</text>
+  <text x="291" y="333" font-size="11" text-anchor="middle">the mnemonic</text>
+  <text x="36" y="404" font-size="12" fill="#5a6676">The wallet pays the fee and takes the change.</text>
+  <text x="36" y="438" font-size="13" font-weight="700">Refresh transaction</text>
+  <rect x="36" y="448" width="518" height="84" rx="8" fill="#ffffff" stroke="#a89a94"/>
+  <text x="50" y="472" font-size="12">Built on the server and signed with the mnemonic.</text>
+  <text x="50" y="492" font-size="12">Fee: 0.008 ERG from the wallet.</text>
+  <text x="36" y="566" font-size="13" font-weight="700">What the daemon does</text>
+  <text x="36" y="588" font-size="12">• picks wallet boxes to pay the fee and returns change to the wallet</text>
+  <text x="36" y="608" font-size="12">• signs with the mnemonic</text>
+  <text x="36" y="628" font-size="12">• can post at any time: no rate limit on chain</text>
+  <text x="36" y="648" font-size="12">• also builds and signs the refresh</text>
+  <text x="36" y="712" font-size="13" font-weight="700">If the server is hacked</text>
+  <rect x="36" y="722" width="518" height="92" rx="8" fill="#fdf1ee" stroke="#c96a5c" stroke-width="1.5"/>
+  <text x="50" y="746" font-size="12">Whatever the mnemonic controls can be taken: the wallet's ERG and tokens,</text>
+  <text x="50" y="766" font-size="12">and the oracle boxes' rewards.</text>
+  <rect x="590" y="70" width="550" height="760" rx="10" fill="#eff7ee" stroke="#7fae7a" stroke-width="1.5"/>
+  <text x="606" y="96" font-size="13" font-weight="700" letter-spacing="1.2" fill="#3d6b39">NEW MODEL</text>
+  <text x="606" y="126" font-size="13" font-weight="700">Secret on the server</text>
+  <rect x="606" y="136" width="518" height="62" rx="8" fill="#fff8ec" stroke="#c77d1a" stroke-width="2"/>
+  <text x="620" y="160" font-size="14" font-weight="700">Posting key</text>
+  <text x="620" y="180" font-size="12">signs posts only; owns no box and no ERG. No mnemonic on the server.</text>
+  <text x="606" y="230" font-size="13" font-weight="700">Post transaction, every epoch</text>
+  <text x="606" y="250" font-size="11" fill="#5a6676">spends</text>
+  <text x="916" y="250" font-size="11" fill="#5a6676">creates</text>
+  <rect x="606" y="258" width="200" height="34" rx="6" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="618" y="280" font-size="12">Oracle box</text>
+  <rect x="606" y="300" width="200" height="34" rx="6" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="618" y="322" font-size="12">Authority box</text>
+  <rect x="916" y="258" width="208" height="34" rx="6" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="928" y="280" font-size="12">Oracle box, new prices</text>
+  <rect x="916" y="300" width="208" height="34" rx="6" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="928" y="322" font-size="12">Authority box, minus the fee</text>
+  <rect x="916" y="342" width="208" height="34" rx="6" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="928" y="364" font-size="12">Miner fee 0.001 ERG</text>
+  <line x1="814" y1="296" x2="908" y2="296" stroke="#3b4656" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="861" y="318" font-size="11" text-anchor="middle" font-weight="700">signed by</text>
+  <text x="861" y="333" font-size="11" text-anchor="middle">the posting key</text>
+  <text x="606" y="404" font-size="12" fill="#5a6676">One oracle box per transaction. No wallet input and no change output.</text>
+  <text x="606" y="438" font-size="13" font-weight="700">Refresh transaction</text>
+  <rect x="606" y="448" width="518" height="84" rx="8" fill="#ffffff" stroke="#7fae7a" stroke-dasharray="6 4"/>
+  <text x="620" y="472" font-size="12">Not solved on chain yet. The live refresh contract still needs an owner key.</text>
+  <text x="620" y="492" font-size="12">A version signed by the posting key, with the fee paid from the refresh box,</text>
+  <text x="620" y="512" font-size="12">has passed in the simulator only.</text>
+  <text x="606" y="566" font-size="13" font-weight="700">What the daemon does</text>
+  <text x="606" y="588" font-size="12">• finds the authority box: no wallet boxes, no change output</text>
+  <text x="606" y="608" font-size="12">• signs with the posting key</text>
+  <text x="606" y="628" font-size="12">• waits 5 blocks between posts (the contract enforces it)</text>
+  <text x="606" y="648" font-size="12">• a post is valid for about 3 blocks, so it rebuilds one that misses</text>
+  <text x="606" y="668" font-size="12">• warns when the fee ERG runs low: refilling needs the owner key</text>
+  <text x="606" y="712" font-size="13" font-weight="700">If the server is hacked</text>
+  <rect x="606" y="722" width="518" height="92" rx="8" fill="#ffffff" stroke="#7fae7a" stroke-width="1.5"/>
+  <text x="620" y="746" font-size="12">The thief can post wrong prices until you swap the key with the owner key,</text>
+  <text x="620" y="766" font-size="12">and can burn at most 0.002 ERG per post to miners.</text>
+  <text x="620" y="786" font-size="12">No ERG or tokens can be taken.</text>
+  <text x="20" y="856" font-size="12" fill="#5a6676">The new-model daemon code is not written yet. The mainnet test on 2026-10-03 used a standalone script, with dummy tokens.</text>
+  <text x="20" y="874" font-size="12" fill="#5a6676">Fees shown: today's are the daemon's current settings; the new model's is what the mainnet test paid.</text>
+</svg>

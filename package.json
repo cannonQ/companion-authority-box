@@ -1,0 +1,18 @@
+{
+  "name": "companion-authority-probe",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node probe.test.mjs"
+  },
+  "dependencies": {
+    "@fleet-sdk/compiler": "0.12.0",
+    "@fleet-sdk/core": "0.12.0",
+    "@fleet-sdk/crypto": "0.11.0",
+    "@fleet-sdk/mock-chain": "0.12.0",
+    "@fleet-sdk/serializer": "0.11.0",
+    "ergo-lib-wasm-nodejs": "0.28.0",
+    "sigmastate-js": "0.4.6"
+  }
+}

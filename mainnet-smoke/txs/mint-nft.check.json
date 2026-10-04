@@ -1,0 +1,52 @@
+{
+  "id": "fc9361ee6d77e4c570226542a58e61c3077cd05156ee200b13b2b2c81eaf4cb7",
+  "inputs": [
+    {
+      "boxId": "08f96f8659250bd2dd864dbdbd8393464e3d6528c105d486f8b7125389d9f2d6",
+      "spendingProof": {
+        "proofBytes": "2ecfad19515fd9d92cf0bcae56acda6688827a70a09b40ac8bd79dbdd35d2f3aecc34dd8a3bc3032c22f5d34201c0d4a613e6c1941ec4732",
+        "extension": {}
+      }
+    }
+  ],
+  "dataInputs": [],
+  "outputs": [
+    {
+      "boxId": "4b92b3e309c27938e76a098ae33c78a6da2e8e93814a84b0e0927862327c350a",
+      "value": 97000000,
+      "ergoTree": "0008cd02321bdfecc515e90abdc50463f7ac4a745cdcabebbcc5b0af87a66291a05b789c",
+      "assets": [
+        {
+          "tokenId": "a43771dd091a101ecc04b99cfec928ced8605a0c12b320dabed31a8dcae54a6f",
+          "amount": 2
+        },
+        {
+          "tokenId": "287c37a514de22f3b504465fb1f782408bc1e183e6cc30035584d42c9ebdb830",
+          "amount": 10
+        },
+        {
+          "tokenId": "08f96f8659250bd2dd864dbdbd8393464e3d6528c105d486f8b7125389d9f2d6",
+          "amount": 1
+        }
+      ],
+      "additionalRegisters": {
+        "R6": "0e0130",
+        "R4": "0e17534d4f4b45544553542d415554484f524954592d4e4654",
+        "R5": "0e4244756d6d7920636f6d70616e696f6e20617574686f72697479204e465420666f722061206d61696e6e657420736d6f6b6520746573742e20576f7274686c6573732e"
+      },
+      "creationHeight": 1886813,
+      "transactionId": "fc9361ee6d77e4c570226542a58e61c3077cd05156ee200b13b2b2c81eaf4cb7",
+      "index": 0
+    },
+    {
+      "boxId": "a68e7ce87514719e3f1eeb0f6e4213762687fa4fd9c2a5dbdbb74dc38968acbd",
+      "value": 1000000,
+      "ergoTree": "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304",
+      "assets": [],
+      "additionalRegisters": {},
+      "creationHeight": 1886813,
+      "transactionId": "fc9361ee6d77e4c570226542a58e61c3077cd05156ee200b13b2b2c81eaf4cb7",
+      "index": 1
+    }
+  ]
+}

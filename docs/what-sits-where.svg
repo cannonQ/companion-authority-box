@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 880" width="1160" height="880" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" fill="#1c2430">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3b4656"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="880" fill="#ffffff"/>
+
+  <text x="20" y="34" font-size="20" font-weight="700">What sits where: posting with no spending key on the server</text>
+  <text x="20" y="54" font-size="12" fill="#5a6676">Example: oracle daemon and node on a remote Hetzner server. One oracle box shown.</text>
+
+  <!-- COLD -->
+  <rect x="20" y="70" width="270" height="470" rx="10" fill="#eef4fb" stroke="#7a9cc6" stroke-width="1.5"/>
+  <text x="35" y="96" font-size="12" font-weight="700" letter-spacing="1.2" fill="#35557f">COLD: OFFLINE, WITH YOU</text>
+
+  <rect x="35" y="120" width="240" height="84" rx="8" fill="#ffffff" stroke="#7a9cc6" stroke-width="1.5"/>
+  <text x="49" y="146" font-size="14" font-weight="700">Owner key (mnemonic)</text>
+  <text x="49" y="166" font-size="12">never on the server</text>
+  <text x="49" y="184" font-size="12">signs only the rare actions below</text>
+
+  <rect x="35" y="218" width="240" height="82" rx="8" fill="#ffffff" stroke="#7a9cc6"/>
+  <text x="49" y="242" font-size="14" font-weight="700">Also kept here</text>
+  <text x="49" y="262" font-size="12">your ERG</text>
+  <text x="49" y="280" font-size="12">spare oracle tokens</text>
+
+  <text x="35" y="350" font-size="13" font-weight="700">The owner key is used only to</text>
+  <text x="35" y="372" font-size="12">• create the authority box</text>
+  <text x="35" y="392" font-size="12">• swap the posting key</text>
+  <text x="35" y="412" font-size="12">• refill the fee ERG</text>
+  <text x="35" y="432" font-size="12">• reclaim or shut down</text>
+  <text x="35" y="466" font-size="12" fill="#5a6676">Sign on an offline machine, then</text>
+  <text x="35" y="484" font-size="12" fill="#5a6676">broadcast the signed transaction.</text>
+
+  <!-- CHAIN -->
+  <rect x="400" y="70" width="360" height="470" rx="10" fill="#f6f2e6" stroke="#b5a66b" stroke-width="1.5"/>
+  <text x="415" y="96" font-size="12" font-weight="700" letter-spacing="1.2" fill="#6d5f25">ERGO BLOCKCHAIN</text>
+
+  <rect x="420" y="120" width="320" height="120" rx="8" fill="#ffffff" stroke="#b5a66b" stroke-width="1.5"/>
+  <text x="434" y="146" font-size="14" font-weight="700">Authority box</text>
+  <text x="434" y="164" font-size="11" fill="#5a6676">locked by the authority contract</text>
+  <text x="434" y="186" font-size="12">• the NFT (the permission to post)</text>
+  <text x="434" y="204" font-size="12">• ERG: each post's 0.001 fee comes out of here</text>
+  <text x="434" y="222" font-size="12">• names the owner key and the posting key</text>
+
+  <rect x="420" y="260" width="320" height="120" rx="8" fill="#ffffff" stroke="#b5a66b" stroke-width="1.5"/>
+  <text x="434" y="286" font-size="14" font-weight="700">Oracle box</text>
+  <text x="434" y="304" font-size="11" fill="#5a6676">locked by the oracle contract</text>
+  <text x="434" y="326" font-size="12">• oracle token and reward tokens</text>
+  <text x="434" y="344" font-size="12">• your price datapoint</text>
+  <text x="434" y="362" font-size="12">• names the owner key</text>
+
+  <rect x="420" y="400" width="320" height="120" rx="8" fill="#ffffff" stroke="#b5a66b" stroke-dasharray="6 4"/>
+  <text x="434" y="426" font-size="14" font-weight="700">Pool box and refresh box</text>
+  <text x="434" y="444" font-size="11" fill="#5a6676">shared by all operators</text>
+  <text x="434" y="466" font-size="12">• refresh collects the datapoints</text>
+  <text x="434" y="484" font-size="12">• today: refresh needs an owner key</text>
+  <text x="434" y="502" font-size="12">• without it: tested in the simulator only</text>
+
+  <!-- SERVER -->
+  <rect x="870" y="70" width="270" height="470" rx="10" fill="#eff7ee" stroke="#7fae7a" stroke-width="1.5"/>
+  <text x="885" y="96" font-size="12" font-weight="700" letter-spacing="1.2" fill="#3d6b39">HETZNER SERVER: ONLINE 24/7</text>
+
+  <rect x="885" y="120" width="240" height="84" rx="8" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="899" y="146" font-size="14" font-weight="700">Ergo node</text>
+  <text x="899" y="166" font-size="12">reads the chain, broadcasts</text>
+  <text x="899" y="184" font-size="12">wallet empty: no mnemonic, no ERG</text>
+
+  <rect x="885" y="216" width="240" height="64" rx="8" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="899" y="242" font-size="14" font-weight="700">Oracle daemon</text>
+  <text x="899" y="262" font-size="12">fetches prices, builds the post</text>
+
+  <rect x="885" y="292" width="240" height="84" rx="8" fill="#fff8ec" stroke="#c77d1a" stroke-width="2"/>
+  <text x="899" y="318" font-size="14" font-weight="700">Posting key</text>
+  <text x="899" y="338" font-size="12">signs posts, nothing else</text>
+  <text x="899" y="356" font-size="12">owns no box and no ERG</text>
+
+  <rect x="885" y="388" width="240" height="84" rx="8" fill="#ffffff" stroke="#7fae7a"/>
+  <text x="899" y="414" font-size="14" font-weight="700">API keys</text>
+  <text x="899" y="434" font-size="12">for price feeds and alerts</text>
+  <text x="899" y="452" font-size="12">not spending keys</text>
+
+  <text x="885" y="500" font-size="12" fill="#5a6676">Gone from the server: the mnemonic</text>
+  <text x="885" y="518" font-size="12" fill="#5a6676">and the funded wallet.</text>
+
+  <!-- ARROWS -->
+  <line x1="275" y1="162" x2="418" y2="162" stroke="#3b4656" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="345" y="184" font-size="11" text-anchor="middle" font-weight="700">rare, cold-signed</text>
+  <text x="345" y="199" font-size="11" text-anchor="middle">set up · rotate</text>
+  <text x="345" y="214" font-size="11" text-anchor="middle">refill · reclaim</text>
+
+  <line x1="885" y1="326" x2="743" y2="188" stroke="#3b4656" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <line x1="885" y1="334" x2="743" y2="324" stroke="#3b4656" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="815" y="124" font-size="11" text-anchor="middle" font-weight="700">every epoch</text>
+  <text x="815" y="139" font-size="11" text-anchor="middle">post tx, signed by</text>
+  <text x="815" y="154" font-size="11" text-anchor="middle">the posting key</text>
+  <text x="815" y="372" font-size="11" text-anchor="middle">spends both boxes,</text>
+  <text x="815" y="387" font-size="11" text-anchor="middle">recreates both</text>
+
+  <!-- NOTES -->
+  <rect x="20" y="560" width="560" height="150" rx="10" fill="#fdf1ee" stroke="#c96a5c" stroke-width="1.5"/>
+  <text x="36" y="586" font-size="14" font-weight="700">If the server is hacked</text>
+  <text x="36" y="610" font-size="12">The thief gets the posting key and nothing else of value.</text>
+  <text x="36" y="632" font-size="12">• Can post wrong prices until you swap the key with the owner key.</text>
+  <text x="36" y="652" font-size="12">• Can burn the fee allowance to miners: at most 0.002 ERG per post.</text>
+  <text x="36" y="672" font-size="12">• Cannot move ERG or tokens to any address of their choosing.</text>
+  <text x="36" y="692" font-size="12">• Cannot lock you out: the owner key always overrides.</text>
+
+  <rect x="600" y="560" width="540" height="150" rx="10" fill="#f3f4f6" stroke="#8a94a3" stroke-width="1.5"/>
+  <text x="616" y="586" font-size="14" font-weight="700">Status, 2026-10-03</text>
+  <text x="616" y="610" font-size="12">• Posting: worked on mainnet with dummy tokens (3 posts mined).</text>
+  <text x="616" y="632" font-size="12">• Refresh without the owner key: simulator only, needs a new</text>
+  <text x="628" y="650" font-size="12">refresh contract.</text>
+  <text x="616" y="672" font-size="12">• Audit: high and medium fixes applied, re-audit pending.</text>
+  <text x="616" y="692" font-size="12">• Not in use on the live pool.</text>
+
+  <rect x="20" y="725" width="1120" height="135" rx="10" fill="#fff8ec" stroke="#c77d1a" stroke-width="1.5"/>
+  <text x="36" y="751" font-size="14" font-weight="700">Who pays the posting fee, and what makes the posting key valid</text>
+  <text x="36" y="775" font-size="12">• No mnemonic and no wallet pays a post. The fee comes out of the authority box: the contract lets up to 0.002 ERG per post leave as the miner fee.</text>
+  <text x="36" y="795" font-size="12">• The owner key funds the authority box once at setup and refills it when it runs low. On mainnet it held 0.011 ERG and each post took 0.001 ERG.</text>
+  <text x="36" y="815" font-size="12">• The posting key is a plain key generated on the server. It is not derived from the mnemonic and has no address with funds.</text>
+  <text x="36" y="835" font-size="12">• It is valid only because the owner key wrote its public half into the authority box. Swapping it is one owner-key transaction.</text>
+</svg>

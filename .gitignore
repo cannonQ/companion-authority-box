@@ -1,0 +1,5 @@
+node_modules/
+*.result
+# throwaway private keys written by `smoke.mjs keys` — never commit
+.keys.json
+**/.keys.json
