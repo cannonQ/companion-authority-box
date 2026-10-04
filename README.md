@@ -1,7 +1,7 @@
 # Companion Authority Box: oracle posting with a no-spend key on the operator's server
 
 > **Status: proof of concept, for review. Not in use on any live pool.**
-> Posting worked on mainnet with dummy tokens on 2026-10-03. Refresh is not covered yet (see [The goal](#the-goal-a-remote-box-with-limited-authority)).
+> Posting worked on mainnet with dummy tokens on 2026-10-03. Keyless refresh is designed and simulator-tested only (see [The goal](#the-goal-a-remote-box-with-limited-authority)).
 
 ## The goal: a remote box with limited authority
 
@@ -18,7 +18,7 @@ The goal is to cut what the operator's server can do down to the job it performs
 
 This repo meets rules 1 to 3 for **posting**. The operator's server keeps one **posting key**, which can update the operator's own oracle box and spend nothing else. The posting fee comes out of an on-chain authority box under a contract cap, so the operator's server holds no ERG.
 
-It does not meet the goal for **refresh** yet. Refresh still needs an oracle owner signature, and a pool needs at least one refresher. So until refresh is solved, at least one operator per pool still holds an owner key online. Rule 4 is not delivered either: rotation and refills need offline-signed transactions, and production tooling for that does not exist yet. Any proposal for refresh, or any alternative design, should be judged against the four rules above.
+**Refresh** is designed but not proven. With the standard refresh contract, a refresh needs an oracle owner signature, and a pool needs at least one refresher, so at least one operator per pool would still hold an owner key online. The keyless design closes that. Each post also writes the posting key into the oracle box's R7. A new refresh contract then accepts a refresh signed by the R7 key of any collected oracle box, pays the fee from the refresh box under a cap, and wipes R7 on collection. The current contracts in this repo already allow a post to write R7. The refresh side has been tested only in a simulator, against the AVL pool's refresh contract. It is not audited, has not run on mainnet, and is not in this repo yet. Rule 4 is not delivered either: rotation and refills need offline-signed transactions, and production tooling for that does not exist yet. Any proposal for refresh, or any alternative design, should be judged against the four rules above.
 
 ### What a compromised server costs
 
@@ -85,7 +85,7 @@ The original idea (April 2026, [`reference/CompanionAuthorityContract.es`](refer
 For an existing pool, adopting this means:
 
 - **A new oracle contract per operator.** Oracle tokens cannot leave their current script, so this also means new oracle tokens.
-- **A new refresh contract** that accepts the new oracle tokens, introduced through the pool's update mechanism. The pool NFT stays the same.
+- **A new refresh contract** that accepts the new oracle tokens and carries the keyless refresh path, introduced through the pool's update mechanism. The pool NFT stays the same.
 - **oracle-core changes** (below).
 - **An authority box per operator**, funded once and refilled as it runs low.
 - **Cold-signing tooling** for setup, rotation, refills and reclaim.
@@ -98,7 +98,7 @@ This comes from reading EIP-23 and oracle-core, not from a test against a deploy
 - A config option for the posting secret in place of the wallet mnemonic.
 - Tracking of the operator's authority box, with an alert when its ERG runs low or when posts stop landing.
 - Support for one oracle script per operator. oracle-core assumes a single oracle contract per pool today. How much this touches its scanning, bootstrap and update flows is an open question.
-- A refresh path that meets the goal. Until then, refreshers keep an owner key online.
+- A refresh action for the keyless path: sign with the posting key, the one written into a collected oracle box's R7. Until the keyless refresh contract is live, refreshers keep an owner key online.
 
 `mainnet-smoke/smoke.mjs` builds every one of these transactions for a test run. It is test tooling, not a daemon.
 
