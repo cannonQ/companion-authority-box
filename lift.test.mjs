@@ -104,7 +104,10 @@ function world({ gate, oracleSrc = gate === "hash" ? ORACLE_V2_SRC : ORACLE_V2_V
 
   // Authority compiled FIRST: the fixed oracle takes blake2b256(authority tree) as authorityScriptHash, and names its
   // NFT constant authorityNftId (audit V-2); the original OracleContractV2.es keeps companionNftId and no hash.
-  const companionTree = compile(gate === "hash" ? HASH_GATE_SRC : HOT_KEY_SRC, { map: { epochLength: SInt(EPOCH) } }).toHex();
+  // The hot-key authority also takes poolNftId (its refresh-fee path needs the pool NFT at INPUTS(0)); same id as the oracle's.
+  const companionTree = gate === "hash"
+    ? compile(HASH_GATE_SRC, { map: { epochLength: SInt(EPOCH) } }).toHex()
+    : compile(HOT_KEY_SRC, { map: { epochLength: SInt(EPOCH), poolNftId: bytes(POOL_NFT) } }).toHex();
   const omap = { poolNftId: bytes(POOL_NFT) };
   omap[oracleSrc.includes("authorityNftId") ? "authorityNftId" : "companionNftId"] = bytes(COMPANION_NFT);
   if (oracleSrc.includes("authorityScriptHash")) omap.authorityScriptHash = bytes(blake2b256(hex.decode(companionTree)));
@@ -126,6 +129,8 @@ function world({ gate, oracleSrc = gate === "hash" ? ORACLE_V2_SRC : ORACLE_V2_V
       R4: SGroupElement(owner.key.publicKey).toHex(),
       R5: bytes(ORACLE_TOKEN).toHex(),
       R6: (gate === "hash" ? bytes(blake2b256(PREIMAGE)) : SGroupElement(server.key.publicKey)).toHex(),
+      // hot-key gate: R7 = post stamp, R8 = fee stamp (Int), both one lock length back, so a post stamped H0 is allowed
+      ...(gate === "hash" ? {} : { R7: SInt(H0 - EPOCH).toHex(), R8: SInt(H0 - EPOCH).toHex() }),
     },
   }));
   return { chain, owner, server, attacker, oracleTree, companionTree, oracleParty, companionParty, gate };
@@ -147,9 +152,11 @@ function post(w, { payer, prices, epoch = 8, ext }) {
     .setAdditionalRegisters({ R4: ob.additionalRegisters.R4, R5: SInt(epoch), R6: SColl(SLong, prices) });
   // Self-funded hot-key post pays the intended single-post fee (POST_FEE); the wallet-paid hash-gate post keeps Fleet's default.
   const fee = payer ? RECOMMENDED_MIN_FEE_VALUE : POST_FEE;
+  // Hot-key successor: R7 := the post stamp (= the build height H0, the HEIGHT both interpreters see), R8 carried over.
+  const stamps = cb.additionalRegisters.R7 === undefined ? {} : { R7: SInt(w.chain.height), R8: cb.additionalRegisters.R8 };
   const successor = new OutputBuilder(payer ? cb.value : cb.value - fee, w.companionTree)
     .addTokens(cb.assets)
-    .setAdditionalRegisters({ R4: cb.additionalRegisters.R4, R5: cb.additionalRegisters.R5, R6: cb.additionalRegisters.R6 });
+    .setAdditionalRegisters({ R4: cb.additionalRegisters.R4, R5: cb.additionalRegisters.R5, R6: cb.additionalRegisters.R6, ...stamps });
   return new TransactionBuilder(w.chain.height)
     .from(inputs, { ensureInclusion: true })
     .to([oracleOut, successor])

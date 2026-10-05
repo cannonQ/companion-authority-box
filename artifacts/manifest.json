@@ -1,0 +1,320 @@
+{
+  "compiler": {
+    "package": "@fleet-sdk/compiler",
+    "version": "0.12.0",
+    "sigmastateJs": "0.4.6",
+    "options": "defaults (ErgoTree v1, segregated constants)"
+  },
+  "placeholders": {
+    "poolNftId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "authorityNftId": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+  },
+  "compileConstants": {
+    "CompanionAuthorityHotKey": {
+      "epochLength": 5,
+      "poolNftId": "placeholder"
+    },
+    "OracleContractV2_valuefix": {
+      "poolNftId": "placeholder",
+      "authorityNftId": "placeholder",
+      "authorityScriptHash": "blake2b256 of the authority tree above"
+    }
+  },
+  "sources": {
+    "CompanionAuthorityHotKey": "7798d7ed06a196e9f8d5a58820fb6b7d6134693b214e861893f00fa6468b7039",
+    "OracleContractV2_valuefix": "569225c90d52b3067f319d754855753efa200ee92c9f2d9732a37885086c044b"
+  },
+  "trees": {
+    "CompanionAuthorityHotKey": {
+      "size": 896,
+      "header": "19",
+      "blake2b256": "1a9205d15933780c5599026bbb775b6b0a17be37a01b197ac3b248c07b55a4bf",
+      "constants": [
+        {
+          "index": 0,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 1,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 2,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 3,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 4,
+          "type": "SColl[SByte]",
+          "value": "0e691005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304"
+        },
+        {
+          "index": 5,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 6,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 7,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 8,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 9,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 10,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 11,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 12,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 13,
+          "type": "SBool",
+          "value": "0101"
+        },
+        {
+          "index": 14,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 15,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 16,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 17,
+          "type": "SColl[SByte]",
+          "value": "0e20a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        },
+        {
+          "index": 18,
+          "type": "SLong",
+          "value": "058092f401"
+        },
+        {
+          "index": 19,
+          "type": "SLong",
+          "value": "0500"
+        },
+        {
+          "index": 20,
+          "type": "SInt",
+          "value": "040a"
+        },
+        {
+          "index": 21,
+          "type": "SInt",
+          "value": "0408"
+        },
+        {
+          "index": 22,
+          "type": "SBool",
+          "value": "0100"
+        },
+        {
+          "index": 23,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 24,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 25,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 26,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 27,
+          "type": "SBool",
+          "value": "0101"
+        },
+        {
+          "index": 28,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 29,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 30,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 31,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 32,
+          "type": "SLong",
+          "value": "058092f401"
+        },
+        {
+          "index": 33,
+          "type": "SInt",
+          "value": "040a"
+        },
+        {
+          "index": 34,
+          "type": "SInt",
+          "value": "0408"
+        },
+        {
+          "index": 35,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 36,
+          "type": "SBool",
+          "value": "0100"
+        },
+        {
+          "index": 37,
+          "type": "SBool",
+          "value": "0100"
+        }
+      ],
+      "hex": "19fd062604000400040004000e691005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a573040402040004000402040004000402040001010402040004000e20a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1058092f4010500040a04080100040004000400040001010402040204000400058092f401040a0408040001000100d805d601db6308a7d6029591b1720173008cb2720173010001830002d603b5a5d9010363d801d605db63087203eded91b172057302938cb2720573030001720293c27203c2a7d6047304d605e4c6a70407eb029593b172037305d804d60693b1b5a4d9010663d801d608db63087206ed91b172087306938cb272087307000172027308d607b27203730900d60893db630872077201d609e4c6a7050e9593e5e30104730a730bd802d60adb6308b2a4730c00d60b99c1a7c1720795ededededed730d720693b1b5a4d9010c6393c2720cc2a7730e939591b1720a730f8cb2720a7310000183000273117208ed90720b731292b0a57313d9010c4163d802d60e8c720c02d60f8c720c019593c2720e72049a720fc1720e720f720bd802d60ce4c672070804d60de4c6a70607ea02d1ededed92720c9ae4c6a70804731490720ca392720c99a37315ededed93e4c672070407720593e4c67207050e720993e4c672070607720d93e4c672070704e4c6a70704cd720dd17316d802d60ab5a4d9010a63d801d60cdb6308720aed91b1720c7317938cb2720c731800017209d60bb5a5d9010b63d801d60ddb6308720bed91b1720d7319938cb2720d731a0001720995ededed731bededed720693b1720a731c93b1720b731dd802d60cb2720b731e00d60db2720a731f00ededed93c2720cc2720d93db6308720cdb6308720d93c1720cc1720dafa5d9010e63d801d610c5720eecec937210c57207937210c5720c93c2720e7204720892c1720799c1a77320d802d60ce4c672070704d60de4c6a70607ea02d1ededed92720c9ae4c6a70704732190720ca392720c99a37322edededed93e4c6b2720a7323000407720593e4c672070407720593e4c67207050e720993e4c672070607720d93e4c672070804e4c6a70804cd720dd17324d17325cd7205"
+    },
+    "OracleContractV2_valuefix": {
+      "size": 420,
+      "header": "19",
+      "blake2b256": "d8898cc8c486fce4d9d2de2e7e62e7b0f72476a06d9eb7599ef7cbf3ed0b4ddc",
+      "constants": [
+        {
+          "index": 0,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 1,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 2,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 3,
+          "type": "SLong",
+          "value": "0580dac409"
+        },
+        {
+          "index": 4,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 5,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 6,
+          "type": "SColl[SByte]",
+          "value": "0e20a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        },
+        {
+          "index": 7,
+          "type": "SInt",
+          "value": "0404"
+        },
+        {
+          "index": 8,
+          "type": "SInt",
+          "value": "0404"
+        },
+        {
+          "index": 9,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 10,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 11,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 12,
+          "type": "SInt",
+          "value": "0402"
+        },
+        {
+          "index": 13,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 14,
+          "type": "SInt",
+          "value": "0400"
+        },
+        {
+          "index": 15,
+          "type": "SColl[SByte]",
+          "value": "0e20a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+        },
+        {
+          "index": 16,
+          "type": "SColl[SByte]",
+          "value": "0e201a9205d15933780c5599026bbb775b6b0a17be37a01b197ac3b248c07b55a4bf"
+        }
+      ],
+      "hex": "19a103110400040004000580dac409040004000e20a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1040404040402040204020402040004000e20a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a20e201a9205d15933780c5599026bbb775b6b0a17be37a01b197ac3b248c07b55a4bfd804d601e4e30004d602b2a5720100d603e4c6a70407d604db6308b2a4730000ea02d1edededed93c5b2a4720100c5a793b2db63087202730100b2db6308a773020093c27202c2a7e6c67202040792c172027303eb02eb02cd7203d1ededededededed939591b1720473048cb2720473050001830002730693b1db6308a7730793b1db630872027308938cb2db63087202730900018cb2db6308a7730a0001918cb2db63087202730b00028cb2db6308a7730c000293e4c672020407720392c17202c1a7efe6c672020561d1edededaea4d9010563d801d607db63087205ededed91b17207730d938cb27207730e0001730f93cbc27205731093e4c672050407720393e4c672020407720393db63087202db6308a792c17202c1a7"
+    }
+  }
+}

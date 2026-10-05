@@ -145,12 +145,15 @@ export function loadContracts() {
   if (!authSrc.includes(`fromBase16("${FEE_CONTRACT}")`)) throw new Error("authority minerFeeProp != Fleet FEE_CONTRACT (the fee output would not match)");
   for (const id of ["poolNftId", "authorityNftId", "authorityScriptHash"]) if (!oracleSrc.includes(id)) throw new Error(`oracle source no longer references ${id}`);
   if (!/\bepochLength\b/.test(authSrc)) throw new Error("authority source no longer references epochLength");
+  if (!/\bpoolNftId\b/.test(authSrc)) throw new Error("authority source no longer references poolNftId");
   if (C.FEE > maxFeePerEpoch) throw new Error(`post fee ${C.FEE} exceeds the contract cap maxFeePerEpoch=${maxFeePerEpoch}`);
   if (C.ORACLE_VALUE < minStorageRent) throw new Error(`oracle box value ${C.ORACLE_VALUE} < contract minStorageRent ${minStorageRent}`);
   if (mempoolSlack >= C.EPOCH_LENGTH) throw new Error(`mempoolSlack ${mempoolSlack} must be < epochLength ${C.EPOCH_LENGTH}`);
   return { authSrc, oracleSrc, maxFeePerEpoch, mempoolSlack, minStorageRent };
 }
-export const compileAuthority = (c) => compile(c.authSrc, { map: { epochLength: SInt(C.EPOCH_LENGTH) } }).toHex();
+// The authority's refresh-fee path needs poolNftId at INPUTS(0). This test never refreshes: the same unreachable dummy id
+// as the oracle's poolNftId keeps that path dead, exactly like the oracle's collection path.
+export const compileAuthority = (c) => compile(c.authSrc, { map: { epochLength: SInt(C.EPOCH_LENGTH), poolNftId: bytesC(POOL_NFT_DUMMY) } }).toHex();
 // The audited oracle pins the authority script: authorityScriptHash = blake2b256(authority tree). The authority is
 // therefore compiled FIRST and its tree passed in. authorityNftId was `companionNftId` before the audit (renamed, V-2).
 export const authorityScriptHashOf = (authorityTree) => hex.encode(blake2b256(hex.decode(authorityTree)));
@@ -182,6 +185,9 @@ export function normBox(b) {
   };
 }
 const regVal = (box, r) => decode(box.additionalRegisters[r]).data;
+// The posting lock: the authority box's R7 post stamp (Int). A box recorded before the stamps existed (the pre-audit
+// contract that ran on mainnet on 2026-10-03) has no R7; its lock was its creation height.
+const postStampOf = (ab) => (ab.additionalRegisters?.R7 ? Number(regVal(ab, "R7")) : Number(ab.creationHeight));
 const gePk = (box, r) => { const h = box.additionalRegisters[r]; if (!h?.startsWith("07") || h.length !== 68) throw new Error(`${r} is not a GroupElement`); return h.slice(2); };
 const sumTokens = (boxes) => {
   const m = new Map();
@@ -442,7 +448,8 @@ export function computeBudget(contracts, mvpb = C.MIN_VALUE_PER_BYTE) {
   const dummy = (b) => b.toString(16).padStart(2, "0").repeat(32);
   const pk = "02" + dummy(0x11);
   const authCand = { value: "11000000", ergoTree: authTree, creationHeight: 1_700_000, assets: [{ tokenId: dummy(0xa2), amount: "1" }],
-    additionalRegisters: { R4: SGroupElement(hex.decode(pk)).toHex(), R5: bytesC(dummy(0xa3)).toHex(), R6: SGroupElement(hex.decode(pk)).toHex() } };
+    additionalRegisters: { R4: SGroupElement(hex.decode(pk)).toHex(), R5: bytesC(dummy(0xa3)).toHex(), R6: SGroupElement(hex.decode(pk)).toHex(),
+      R7: SInt(1_700_000).toHex(), R8: SInt(1_700_000).toHex() } };
   const authSize = BigInt(estimateBoxSize(authCand));
   const authMin = authSize * mvpb;
   const authReserve = maxBig(C.FEE, roundUp(2n * authMin, 1_000_000n));
@@ -550,7 +557,9 @@ async function stepSetup(S) {
     .setAdditionalRegisters({ R4: SGroupElement(hex.decode(owner.pk)), R5: SInt(1), R6: SColl(SLong, makePrices(ctx.tip)) });
   const authOut = new OutputBuilder(budget.authorityValue, authorityTree, stamp)
     .addTokens([{ tokenId: nftId, amount: 1n }])
-    .setAdditionalRegisters({ R4: SGroupElement(hex.decode(owner.pk)), R5: bytesC(oracleId), R6: SGroupElement(hex.decode(posting.pk)) });
+    // R7 post stamp / R8 fee stamp start at the setup stamp: the first post needs a stamp >= setup stamp + epochLength.
+    .setAdditionalRegisters({ R4: SGroupElement(hex.decode(owner.pk)), R5: bytesC(oracleId), R6: SGroupElement(hex.decode(posting.pk)),
+      R7: SInt(stamp), R8: SInt(stamp) });
   const extraTokens = input.assets.filter((a) => ![oracleId, rewardId, nftId].includes(a.tokenId)).map((a) => ({ tokenId: a.tokenId, amount: BigInt(a.amount) }));
   const changeOut = new OutputBuilder(rest, owner.tree, stamp)
     .addTokens([{ tokenId: oracleId, amount: 1n }, { tokenId: rewardId, amount: 8n }, ...extraTokens]);
@@ -607,14 +616,16 @@ function buildPostTx(S, ctx, { variant = "honest", priceSalt = 0 } = {}) {
   const oracleOut = new OutputBuilder(BigInt(ob.value), c.oracleTree, stamp)
     .addTokens(ob.assets.map((a) => ({ tokenId: a.tokenId, amount: BigInt(a.amount) })))
     .setAdditionalRegisters({ R4: ob.additionalRegisters.R4, R5: SInt(epoch), R6: SColl(SLong, makePrices(ctx.tip + epoch + priceSalt)) });
+  // A post writes its stamp into R7 and carries R8 (the fee stamp) over.
   const succ = new OutputBuilder(BigInt(ab.value) - fee - changeV, c.authorityTree, stamp)
     .addTokens(ab.assets.map((a) => ({ tokenId: a.tokenId, amount: BigInt(a.amount) })))
-    .setAdditionalRegisters({ R4: ab.additionalRegisters.R4, R5: ab.additionalRegisters.R5, R6: ab.additionalRegisters.R6 });
+    .setAdditionalRegisters({ R4: ab.additionalRegisters.R4, R5: ab.additionalRegisters.R5, R6: ab.additionalRegisters.R6,
+      R7: SInt(stamp), R8: ab.additionalRegisters.R8 });
   const outs = [oracleOut, succ];
   if (changeV) outs.push(new OutputBuilder(changeV, S.K.owner.tree, stamp));
   outs.push(new OutputBuilder(fee, FEE_CONTRACT, stamp));
   const { eip12 } = assemble([{ box: ob, ext: { 0: SInt(0) } }, { box: ab }], outs);
-  return { eip12, fee, stamp, epoch, unlockAt: ab.creationHeight + C.EPOCH_LENGTH };
+  return { eip12, fee, stamp, epoch, unlockAt: postStampOf(ab) + C.EPOCH_LENGTH };
 }
 function assertPostShape(S, eip12, fee, signer) {
   const c = S.state.contracts; const fails = [];
@@ -645,7 +656,7 @@ async function stepPost(S) {
   const { eip12, fee, stamp, epoch, unlockAt } = buildPostTx(S, ctx);
   if (stamp < unlockAt) {
     const needTip = unlockAt + S.stampOffset;
-    S.io.print(`HEIGHT LOCK: this post would be stamped ${stamp}, the authority box (created ${S.state.boxes.authority.creationHeight}) allows >= ${unlockAt}.`);
+    S.io.print(`HEIGHT LOCK: this post would be stamped ${stamp}, the authority box (post stamp R7 = ${postStampOf(S.state.boxes.authority)}) allows >= ${unlockAt}.`);
     S.io.print(`wait until the node tip is >= ${needTip} (${needTip - ctx.tip} more block(s)); nothing built.`);
     return { tooEarly: true, needTip };
   }
@@ -753,13 +764,14 @@ async function stepRotate(S) {
   const newKey = S.K.posting2;
   const succ = new OutputBuilder(BigInt(ab.value) - C.FEE, c.authorityTree, stamp)
     .addTokens(ab.assets.map((a) => ({ tokenId: a.tokenId, amount: BigInt(a.amount) })))
-    .setAdditionalRegisters({ R4: ab.additionalRegisters.R4, R5: ab.additionalRegisters.R5, R6: SGroupElement(hex.decode(newKey.pk)) });
+    .setAdditionalRegisters({ R4: ab.additionalRegisters.R4, R5: ab.additionalRegisters.R5, R6: SGroupElement(hex.decode(newKey.pk)),
+      R7: ab.additionalRegisters.R7, R8: ab.additionalRegisters.R8 });
   const { eip12 } = assemble([{ box: ab }], [succ, new OutputBuilder(C.FEE, FEE_CONTRACT, stamp)]);
   const srTx = signSigmastate(eip12, ctx, [S.K.owner.secret]);
   const v = verifyInputs(srTx, eip12, ctx);
   const { problems, outBoxes } = lint(eip12, srTx, ctx, { fee: C.FEE });
   const size = printTx(S, "rotate: owner (cold) key replaces R6 with posting2, in place; fee out of the authority box", eip12, srTx, C.FEE, [
-    `next post (new key) allowed once tip >= ${stamp + C.EPOCH_LENGTH + S.stampOffset} (rotation restarts the height lock)`,
+    `next post (new key) allowed once tip >= ${postStampOf(ab) + C.EPOCH_LENGTH + S.stampOffset} (the rotation carries R7/R8 over: it does not restart the lock)`,
     `local verify (sigma-rust): ${v.per.map((x, i) => `in#${i} ${x === true ? "OK" : x}`).join(", ")}; validate_tx ${v.full}`,
     problems.length ? `PROBLEMS: ${problems.join("; ")}` : "consensus/no-burn checks: OK"]);
   if (problems.length || v.full !== "OK" || v.per.some((x) => x !== true)) throw new Error("local checks failed");
@@ -835,7 +847,7 @@ async function stepStatus(S, live) {
   if (st.contracts) p(`scripts: oracle ${st.contracts.oracleAddress}\n         authority ${st.contracts.authorityAddress}`);
   for (const [n, b] of Object.entries(st.boxes ?? {}))
     p(`box ${n.padEnd(15)} ${b.boxId}  ${fmtErg(b.value)} ERG  h=${b.creationHeight}  tokens: ${b.assets.map((a) => `${tokenName(S, a.tokenId)}:${a.amount}`).join(",") || "-"}`);
-  if (st.boxes?.authority) p(`next post allowed at tip >= ${st.boxes.authority.creationHeight + C.EPOCH_LENGTH + S.stampOffset} (stamp offset ${S.stampOffset}); active posting key: ${st.activePosting}`);
+  if (st.boxes?.authority) p(`next post allowed at tip >= ${postStampOf(st.boxes.authority) + C.EPOCH_LENGTH + S.stampOffset} (stamp offset ${S.stampOffset}); active posting key: ${st.activePosting}`);
   p(`posts: ${st.posts.map((x) => `e${x.epoch}@stamp${x.stamp}(${x.key}) ${x.txId}`).join("\n       ") || "-"}`);
   p(`negative controls: ${st.negatives.map((x) => `${x.variant}:${x.outcome}[${x.mode}]`).join(", ") || "-"}`);
   if (st.reclaim) p(`reclaimed to ${st.reclaim.destAddress} in ${st.reclaim.txId}`);
@@ -898,7 +910,7 @@ async function runPlan(print) {
   const fresh = () => { S._ctx = null; };
   const rows = [];
   const wait = (blocks) => { sim.mine(blocks); fresh(); };
-  const untilUnlock = () => { const need = S.state.boxes.authority.creationHeight + C.EPOCH_LENGTH + S.stampOffset; if (sim.height < need) wait(need - sim.height); };
+  const untilUnlock = () => { const need = postStampOf(S.state.boxes.authority) + C.EPOCH_LENGTH + S.stampOffset; if (sim.height < need) wait(need - sim.height); };
   await stepFund(S, fundBox.boxId); fresh();
   const mints = await stepMint(S); fresh();
   for (const m of mints) rows.push({ step: `mint-${m.key}`, size: m.size, fee: C.FEE, signer: "owner" });
@@ -959,7 +971,7 @@ async function runPlan(print) {
   p("");
   p(`Timing: post #1 needs ~${C.EPOCH_LENGTH + 1} blocks after setup; each next post ${C.EPOCH_LENGTH}+ blocks after the previous one;`);
   p(`  post-bad early must run within ~${C.EPOCH_LENGTH - 1} blocks after a post; change/overfee/oldkey only while the lock is OPEN`);
-  p(`  (the script checks both); rotate restarts the ${C.EPOCH_LENGTH}-block lock. Whole live run ~25-35 blocks (~1 h).`);
+  p(`  (the script checks both); the ${C.EPOCH_LENGTH}-block lock runs on the post stamp R7, which rotate keeps. Whole live run ~25-35 blocks (~1 h).`);
   p(`  A post is includable only in blocks tip+1..tip+${contracts.mempoolSlack - 1} (stamped tip-1). If it is not mined by then it`);
   p("  expires: check `status --live`; once it shows unknown, `undo --yes` and post again (costs nothing).");
   if (!oracleBox) p("(internal: oracle box not recorded)");

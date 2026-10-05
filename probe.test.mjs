@@ -11,6 +11,9 @@
 // owns no box at all in every hot-key world. Every part-B attack also lands in
 // the THIEF LEDGER at the end (ERG + token delta of everything the thief holds).
 //
+// Section F runs the refresh-fee path (context var 1 = 1): the posting key pays a refresh's miner fee out of the
+// authority box, rate-limited on the R8 fee stamp; posts are rate-limited on the R7 post stamp (no creation-height lock).
+//
 // Every check states its expected outcome up front. "FINDING" = an attack that
 // is ACCEPTED (expected so); "KNOWN LIMIT" = a documented rejection of
 // something an operator might want to do.
@@ -20,7 +23,7 @@ import { compile } from "@fleet-sdk/compiler";
 import { MockChain, mockUTxO, mockBlockchainStateContext, BLOCKCHAIN_PARAMETERS } from "@fleet-sdk/mock-chain";
 import { ProverBuilder$ } from "sigmastate-js/main";
 import { OutputBuilder, TransactionBuilder, ErgoUnsignedInput, RECOMMENDED_MIN_FEE_VALUE, SAFE_MIN_BOX_VALUE, FEE_CONTRACT } from "@fleet-sdk/core";
-import { SInt, SLong, SColl, SByte, SGroupElement } from "@fleet-sdk/serializer";
+import { SInt, SLong, SColl, SByte, SGroupElement, decode } from "@fleet-sdk/serializer";
 import { blake2b256, hex } from "@fleet-sdk/crypto";
 
 const ORIGINALS = new URL("./reference/", import.meta.url);
@@ -99,8 +102,26 @@ const compileOracle = (src, nftId, authTree = HOT_KEY_TREE) => {
   if (src.includes("authorityScriptHash")) map.authorityScriptHash = bytes(blake2b256(hex.decode(authTree)));
   return compile(src, { map }).toHex();
 };
-const compileCompanion = (gate) => compile(gate === "hash" ? HASH_GATE_SRC : HOT_KEY_SRC, { map: { epochLength: SInt(EPOCH) } }).toHex();
+// The authority contract takes two compile constants: epochLength (Int) and poolNftId (Coll[Byte], the pool box's NFT;
+// the refresh-fee path needs it at INPUTS(0)). Every authority tree in this suite is compiled with the suite's POOL_NFT.
+const authMap = (E) => ({ epochLength: SInt(E), poolNftId: bytes(POOL_NFT) });
+const authTreeOf = (src, E = EPOCH) => compile(src, { map: authMap(E) }).toHex();
+const compileCompanion = (gate) => gate === "hash" ? compile(HASH_GATE_SRC, { map: { epochLength: SInt(EPOCH) } }).toHex() : authTreeOf(HOT_KEY_SRC);
 const HOT_KEY_TREE = compileCompanion("hotkey");
+// Pool stand-in (TEST-ONLY). No refresh or update contract is executed in this suite. This script holds the pool NFT and
+// lets any tx spend it while it sits at INPUTS(0) and is recreated at OUTPUTS(0) with its NFT, script and value; the
+// reward tokens it hands to collected oracle boxes may leave. It is what "a refresh-shaped tx" means below.
+const POOL_STANDIN_SRC = `{
+  sigmaProp(INPUTS(0).id == SELF.id && OUTPUTS(0).propositionBytes == SELF.propositionBytes &&
+            OUTPUTS(0).tokens(0)._1 == SELF.tokens(0)._1 && OUTPUTS(0).value >= SELF.value)
+}`;
+const POOL_TREE = compile(POOL_STANDIN_SRC).toHex();
+function addPool(chain) {
+  const p = chain.addParty(POOL_TREE, "pool-standin");
+  p.addUTxOs(mockUTxO({ ergoTree: POOL_TREE, value: ERG, creationHeight: H0 - 10,
+    assets: [{ tokenId: POOL_NFT, amount: 1n }, { tokenId: REWARD_TOKEN, amount: 1000n }] }));
+  return p;
+}
 const preAuthTreeFor = (E) => compile(HOT_KEY_PRE_SRC, { map: { epochLength: SInt(E) } }).toHex();
 
 // gate: "hash" (current contract) | "hotkey" (candidate)
@@ -111,8 +132,13 @@ const preAuthTreeFor = (E) => compile(HOT_KEY_PRE_SRC, { map: { epochLength: SIn
 //   twinOracle: add a second oracle box on the SAME oracle script as X (same companion NFT), token ORACLE_TOKEN_3
 //   fundServer: give the server (and rotated server) key a wallet box. Default: only for the hash gate, so in every
 //               hot-key world the hot key owns NOTHING (the "no wallet on the server" requirement).
+//   postStamp / feeStamp: the hot-key box's R7 (post stamp) / R8 (fee stamp), both Int. Default = companionHeight, so
+//               every row that set a creation height for the old creation-height lock now sets the same stamp.
+//   stampRegs: override { R7, R8 } of the hot-key box ("none" = no R7/R8 at all, the pre-stamp box layout)
+//   pool: add a pool box (POOL_NFT at tokens(0)) at the pool stand-in script, for refresh-shaped txs
 function world({ gate, oracleSrc = ORACLE_V2_SRC, companionHeight = H0 - EPOCH, oracleHeight = H0 - 100,
-                 fundHeight, companionExtraAssets = [], second = false, twinOracle = false, fundServer = gate === "hash", companionTreeOverride, companionValue = ERG / 10n }) {
+                 fundHeight, companionExtraAssets = [], second = false, twinOracle = false, fundServer = gate === "hash", companionTreeOverride, companionValue = ERG / 10n,
+                 postStamp = companionHeight, feeStamp = companionHeight, stampRegs, pool = false }) {
   const chain = new MockChain({ height: H0 });
   const owner = chain.newParty("owner-cold");
   const owner2 = chain.newParty("owner2-cold");
@@ -133,6 +159,8 @@ function world({ gate, oracleSrc = ORACLE_V2_SRC, companionHeight = H0 - EPOCH, 
     assets: [{ tokenId: token, amount: 1n }, { tokenId: REWARD_TOKEN, amount: 10n }],
     additionalRegisters: { R4: SGroupElement(ownerKey).toHex(), R5: SInt(7).toHex(), R6: SColl(SLong, [100n, 200n]).toHex() },
   });
+  const stamps = gate === "hash" || stampRegs === "none" ? {}
+    : stampRegs ?? { R7: SInt(postStamp).toHex(), R8: SInt(feeStamp).toHex() };
   const companionBoxOf = (nft, token, hot, extra = []) => mockUTxO({
     ergoTree: companionTree, value: companionValue, creationHeight: companionHeight,
     assets: [{ tokenId: nft, amount: 1n }, ...extra],
@@ -140,6 +168,7 @@ function world({ gate, oracleSrc = ORACLE_V2_SRC, companionHeight = H0 - EPOCH, 
       R4: SGroupElement(owner.key.publicKey).toHex(),
       R5: bytes(token).toHex(),
       R6: (gate === "hash" ? bytes(blake2b256(PREIMAGE)) : SGroupElement(hot)).toHex(),
+      ...stamps,
     },
   });
 
@@ -155,7 +184,8 @@ function world({ gate, oracleSrc = ORACLE_V2_SRC, companionHeight = H0 - EPOCH, 
     companionParty.addUTxOs(companionBoxOf(COMPANION_NFT_2, ORACLE_TOKEN_2, server2.key.publicKey));
   }
   if (twinOracle) oracleParty.addUTxOs(oracleBoxOf(oracleTree, ORACLE_TOKEN_3, owner.key.publicKey));
-  return { chain, owner, owner2, server, server2, attacker, oracleTree, oracleTreeY, companionTree, oracleParty, oracleParties, companionParty, gate };
+  const poolParty = pool ? addPool(chain) : undefined;
+  return { chain, owner, owner2, server, server2, attacker, oracleTree, oracleTreeY, companionTree, oracleParty, oracleParties, companionParty, gate, poolParty };
 }
 
 const oracleBox = (w, token = ORACLE_TOKEN) =>
@@ -169,14 +199,23 @@ function oracleOut(ob, { prices = [101n, 201n], epoch = 8, value, assets, r4, tr
   if (r4 !== "omit") o.setAdditionalRegisters({ R4: r4 ?? ob.additionalRegisters.R4, R5: SInt(epoch), R6: SColl(SLong, prices) });
   return o;
 }
-// Faithful successor of a companion box (overrides per field).
-function successorOf(w, cb, { value, assets, r4, r5, r6, r7, height } = {}) {
-  const s = new OutputBuilder(value ?? cb.value, w.companionTree).addTokens(assets ?? cb.assets).setAdditionalRegisters({
-    R4: r4 ?? cb.additionalRegisters.R4, R5: r5 ?? cb.additionalRegisters.R5, R6: r6 ?? cb.additionalRegisters.R6, R7: r7,
-  });
+// Faithful successor of a companion box (overrides per field), shaped as a POST successor by default: on a box that
+// carries stamps, R7 := the post stamp (`stamp`, default = the successor's creation height = the build height, which is
+// what the old creation-height lock read) and R8 is carried over. r7 / r8 / r9 override; r9 is unpinned junk space.
+function successorOf(w, cb, { value, assets, r4, r5, r6, r7, r8, r9, height, stamp } = {}) {
+  const hasStamps = cb.additionalRegisters.R7 !== undefined;
+  const regs = {
+    R4: r4 ?? cb.additionalRegisters.R4, R5: r5 ?? cb.additionalRegisters.R5, R6: r6 ?? cb.additionalRegisters.R6,
+    R7: r7 ?? (hasStamps ? SInt(stamp ?? height ?? w.chain.height) : undefined),
+    R8: r8 ?? cb.additionalRegisters.R8, R9: r9,
+  };
+  for (const k of Object.keys(regs)) if (regs[k] === undefined) delete regs[k];
+  const s = new OutputBuilder(value ?? cb.value, w.companionTree).addTokens(assets ?? cb.assets).setAdditionalRegisters(regs);
   if (height !== undefined) s.setCreationHeight(height);
   return s;
 }
+// Int value of a stamp register (R7 / R8) of a box.
+const stampOf = (b, r) => Number(decode(b.additionalRegisters[r]).data);
 function build(w, { inputs, outputs, payer, height = w.chain.height }) {
   return new TransactionBuilder(height)
     .from(inputs, { ensureInclusion: true })
@@ -193,7 +232,7 @@ function post(w, { payer, prices, epoch = 8, ext, oracleValue, succR6, succR4, s
   const ob = oracleBox(w), cb = companionBox(w);
   const companionIn = new ErgoUnsignedInput(cb);
   if (ext) companionIn.setContextExtension(ext);
-  const succ = successorOf(w, cb, { value: succValue, assets: succAssets, r4: succR4, r6: succR6, r7: succR7 });
+  const succ = successorOf(w, cb, { value: succValue, assets: succAssets, r4: succR4, r6: succR6, r7: succR7, stamp: height });
   if (!withOracle) return build(w, { inputs: [companionIn, ...payer.utxos.toArray()], outputs: [succ], payer, height });
   const oOut = oracleOut(ob, { prices, epoch, value: oracleValue, assets: oracleAssets, r4: oracleR4, tree: oracleTree });
   const outputs = succFirst ? [succ, oOut] : [oOut, succ];
@@ -209,8 +248,10 @@ function ownerTx(w, { mode, newR6, outputs, cb = companionBox(w), payer = w.owne
     .sendChangeTo(payer.address)
     .payFee(RECOMMENDED_MIN_FEE_VALUE);
   if (mode === "rotate") {
+    // carries R7/R8 when the box has them (an owner rotate does not move the stamps)
+    const { R7, R8 } = cb.additionalRegisters;
     b.to(new OutputBuilder(cb.value, w.companionTree).addTokens(cb.assets).setAdditionalRegisters({
-      R4: cb.additionalRegisters.R4, R5: cb.additionalRegisters.R5, R6: newR6,
+      R4: cb.additionalRegisters.R4, R5: cb.additionalRegisters.R5, R6: newR6, ...(R7 !== undefined ? { R7 } : {}), ...(R8 !== undefined ? { R8 } : {}),
     }));
   } else if (mode === "reclaim") {
     b.to(new OutputBuilder(cb.value, w.owner.address).addTokens(cb.assets)); // NFT back to the cold wallet
@@ -393,13 +434,17 @@ if (!HOT_KEY_SRC.includes(`fromBase16("${FEE_CONTRACT}")`)) throw new Error("min
 //   OUTPUTS = [oracle', companion' (value - fee by default), ...extraOutputs, minerFee]
 // Change is only created if the inputs leave something over; it goes to `changeTo` (the thief's address by default).
 // fee: null => no payFee (the caller supplies the miner-fee box in extraOutputs).
+// Successor R7 (post stamp) defaults to the successor's creation height (succHeight, else the build height `height`), so
+// rows written for the old creation-height lock drive the post stamp the same way; succStamp moves R7 alone.
+// companionExt: context extension on the companion input (e.g. { 1: SInt(1) } selects the refresh-fee path).
 function spost(w, { prices = [101n, 201n], epoch = 8, fee = POST_FEE, oracleValue, oracleAssets, oracleR4,
-                    oracleTree, outIndex, succValue, succAssets, succR4, succR5, succR6, succR7, succHeight, succFirst = false,
-                    withOracle = true, extraInputs = [], extraOutputs = [], changeTo = w.attacker.address, height,
-                    cb = companionBox(w), ob = oracleBox(w) } = {}) {
+                    oracleTree, outIndex, succValue, succAssets, succR4, succR5, succR6, succR7, succR8, succR9, succHeight, succStamp,
+                    succFirst = false, withOracle = true, extraInputs = [], extraOutputs = [], changeTo = w.attacker.address, height,
+                    companionExt, cb = companionBox(w), ob = oracleBox(w) } = {}) {
   const succ = successorOf(w, cb, { value: succValue ?? cb.value - (fee ?? 0n), assets: succAssets, r4: succR4, r5: succR5, r6: succR6,
-                                   r7: succR7, height: succHeight });
+                                   r7: succR7, r8: succR8, r9: succR9, height: succHeight, stamp: succStamp ?? succHeight ?? height });
   const companionIn = new ErgoUnsignedInput(cb);
+  if (companionExt) companionIn.setContextExtension(companionExt);
   let inputs, outputs;
   if (!withOracle) {
     inputs = [companionIn, ...extraInputs];
@@ -416,7 +461,7 @@ function buildSF(w, { inputs, outputs, fee = POST_FEE, changeTo = w.attacker.add
   if (fee !== null) b.payFee(fee);
   return b.build();
 }
-const kindOf = (w, tree) => tree === w.oracleTree || w.oracleTrees?.includes(tree) ? "oracle" : tree === w.oracleTreeY ? "oracleY" : tree === w.companionTree ? "companion"
+const kindOf = (w, tree) => tree === POOL_TREE ? "pool" : tree === w.oracleTree || w.oracleTrees?.includes(tree) ? "oracle" : tree === w.oracleTreeY ? "oracleY" : tree === w.companionTree ? "companion"
   : tree === FEE_CONTRACT ? "minerFee" : tree === w.attacker.ergoTree ? "THIEF" : tree.startsWith("0008cd") ? "P2PK" : "other";
 
 section("B. CANDIDATE contract: proveDlog(hotKey) gate — self-funded posting is the baseline");
@@ -498,7 +543,7 @@ section("B. what a STOLEN hot key can and cannot do (companion contract)");
   const w = world({ gate: "hotkey" });
   run(w, spost(w, { prices: [1n, 1n] }), [w.server]);
   w.chain.newBlocks(1);
-  attack(w, "B4d hot key posts twice inside one epoch (height lock)", spost(w, { prices: [2n, 2n] }), [w.server], false);
+  attack(w, "B4d hot key posts twice inside one epoch (post-stamp R7 lock; was the creation-height lock)", spost(w, { prices: [2n, 2n] }), [w.server], false);
 }
 {
   const w = world({ gate: "hotkey" });
@@ -768,48 +813,61 @@ section("B. cross-oracle / multi-companion / layout attacks on the candidate");
   attack(w, "D4 control: successor keeps the full token list -> post accepted", spost(w, { prices: [1n, 1n] }), [w.server], true);
 }
 
-section("B. height lock vs HEIGHT (E1) and mempool slack");
+section("B. post-stamp lock (R7) vs HEIGHT (E1) and mempool slack — rebased from the creation-height lock: same rows, R7 is the clock");
 const IDLE = 10;
 const HC = H0 - IDLE * EPOCH;
 const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC, companionHeight: HC, oracleHeight: HC, fundHeight: HC });
 {
-  // The exact wave-1 E1 attack starts with a successor height of SELF + EPOCH (stale, far below HEIGHT). That first
+  // The exact wave-1 E1 attack starts with a successor stamp of SELF + EPOCH (stale, far below HEIGHT). That first
   // post is rejected, so the box never moves and the back-to-back chain cannot start: one attempt is the whole test.
+  // Rebased: the stamp is R7 (the tx is still built at that height, so the creation height matches it as before).
   const w = idleWorld();
   const before = holdings(w);
-  const sh = companionBox(w).creationHeight + EPOCH;
+  const sh = stampOf(companionBox(w), "R7") + EPOCH;
   const tx = spost(w, { prices: [1n, 1n], height: sh });
   const reason = why(w, tx);
   const got = run(w, tx, [w.server]);
-  check(`E1 (was FINDING) after ${IDLE} idle epochs: the stale-height chain cannot start — its first post (successor height SELF + ${EPOCH}) is rejected (wave-1 attack replayed)`, got, false);
-  out.push(`      HEIGHT=${w.chain.height + 1} succH=${sh}${got.startsWith("ACCEPTED") ? "" : `  reduced: ${reason}`}`);
+  check(`E1 (was FINDING) after ${IDLE} idle epochs: the stale-stamp chain cannot start — its first post (successor R7 = SELF.R7 + ${EPOCH}) is rejected (wave-1 attack replayed on the R7 stamp)`, got, false);
+  out.push(`      HEIGHT=${w.chain.height + 1} succR7=${sh}${got.startsWith("ACCEPTED") ? "" : `  reduced: ${reason}`}`);
   record("E1 (was FINDING) stale-height chain, first post", before, holdings(w), got, tx);
 }
 {
-  // Pins MockChain's HEIGHT (= chain.height + 1, the block being built) and the in-contract `created <= HEIGHT`.
+  // Pins MockChain's HEIGHT (= chain.height + 1, the block being built) and the in-contract `R7 <= HEIGHT`.
+  // Rebased: was "successor creationHeight = HEIGHT + 1 (contract repeats the consensus rule)". R7 is not a consensus
+  // field, so here the contract's bound is the only one; the successor's creation height stays the build height.
   const w = idleWorld();
-  attack(w, "E1b successor creationHeight = HEIGHT + 1 (future-dated; contract repeats the consensus rule)",
-    spost(w, { succHeight: w.chain.height + 2 }), [w.server], false);
-  attack(w, "E1b control: successor creationHeight = HEIGHT", spost(w, { succHeight: w.chain.height + 1 }), [w.server], true);
+  attack(w, "E1b successor post stamp R7 = HEIGHT + 1 (future-dated; only the contract bounds R7)",
+    spost(w, { succStamp: w.chain.height + 2 }), [w.server], false);
+  attack(w, "E1b control: successor post stamp R7 = HEIGHT", spost(w, { succStamp: w.chain.height + 1 }), [w.server], true);
 }
 {
+  // New with the stamp: the successor's creation height is no longer read by the authority contract.
   const w = idleWorld();
-  attack(w, `E1c successor creationHeight = HEIGHT - ${SLACK + 1} (one block older than the slack window)`,
-    spost(w, { succHeight: w.chain.height + 1 - SLACK - 1 }), [w.server], false);
-  attack(w, `E1c control: successor creationHeight = HEIGHT - ${SLACK}`, spost(w, { succHeight: w.chain.height + 1 - SLACK }), [w.server], true);
+  attack(w, `E1b2 successor creationHeight stale (= SELF + ${EPOCH} - 1, far below HEIGHT) but R7 = HEIGHT: accepted (creation height not checked)`,
+    spost(w, { succHeight: HC + EPOCH - 1, succStamp: w.chain.height + 1 }), [w.server], true);
+  const w2 = idleWorld();
+  attack(w2, "E1b3 successor creationHeight = HEIGHT but R7 left at SELF.R7 (stamp not advanced): rejected",
+    spost(w2, { succHeight: w2.chain.height + 1, succR7: SInt(HC) }), [w2.server], false);
 }
 {
-  // Best thief strategy after a long idle: at every block, post with the OLDEST successor height the contract allows
-  // (max(SELF + EPOCH, HEIGHT - SLACK)). Compared with an honest server (successor height = chain tip) over the same window.
+  // Rebased: was "successor creationHeight = HEIGHT - slack - 1 / HEIGHT - slack"; same window, on R7.
+  const w = idleWorld();
+  attack(w, `E1c successor post stamp R7 = HEIGHT - ${SLACK + 1} (one block older than the slack window)`,
+    spost(w, { succStamp: w.chain.height + 1 - SLACK - 1 }), [w.server], false);
+  attack(w, `E1c control: successor post stamp R7 = HEIGHT - ${SLACK}`, spost(w, { succStamp: w.chain.height + 1 - SLACK }), [w.server], true);
+}
+{
+  // Best thief strategy after a long idle: at every block, post with the OLDEST post stamp R7 the contract allows
+  // (max(SELF.R7 + EPOCH, HEIGHT - SLACK)). Compared with an honest server (stamp = chain tip) over the same window.
   const WINDOW = 3 * EPOCH;
   const simulate = (pick) => {
     const w = idleWorld();
     const start = w.chain.height, before = holdings(w), txs = [], posts = [];
     while (w.chain.height + 1 <= start + WINDOW) {
       const HEIGHT = w.chain.height + 1;
-      const created = pick(companionBox(w).creationHeight, HEIGHT);
+      const created = pick(stampOf(companionBox(w), "R7"), HEIGHT);
       if (created <= HEIGHT) {
-        const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succHeight: created });
+        const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succStamp: created });
         if (run(w, tx, [w.server]) === "ACCEPTED") { posts.push(`${HEIGHT - start}:${created - start}`); txs.push(tx); continue; }
       }
       w.chain.newBlock();
@@ -822,13 +880,13 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
   const bad = thief.posts.length > honest.posts.length + 1 || thief.posts.length > bound;
   check(`E1d greedy thief after ${IDLE} idle epochs, ${WINDOW}-block window: more posts than honest+1 or than 1+floor((W-1+slack)/epoch)=${bound}`,
     bad ? `ACCEPTED (thief ${thief.posts.length})` : `REJECTED (thief ${thief.posts.length} posts, honest ${honest.posts.length}, bound ${bound})`, false);
-  out.push(`      posts as blockOffset:successorHeightOffset — thief [${thief.posts.join(" ")}]  honest [${honest.posts.join(" ")}]`);
+  out.push(`      posts as blockOffset:postStampOffset — thief [${thief.posts.join(" ")}]  honest [${honest.posts.join(" ")}]`);
   out.push(`      allowance burned by the thief: ${thief.posts.length} x <= ${MAX_FEE_PER_EPOCH} (fee actually paid ${sumFee(thief.txs)})`);
   record(`E1d greedy thief, ${thief.posts.length} posts in ${WINDOW} blocks`, thief.before, thief.after, `ACCEPTED (${thief.posts.length} posts)`, thief.txs);
 }
 {
   const w = world({ gate: "hotkey" });
-  const tx = spost(w, { prices: [101n, 201n] }); // built at tip h: successor creationHeight = h
+  const tx = spost(w, { prices: [101n, 201n] }); // built at tip h: successor R7 (and creationHeight) = h
   w.chain.newBlocks(SLACK - 1);
   check(`E3a legit post built at tip h sits in the mempool and is included in block h+${SLACK}`, run(w, tx, [w.server]), true);
 }
@@ -840,8 +898,8 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
 }
 {
   // The daemon stamps outputs at tip - 1 (OracleBoxPoster.scala:117, :208; Kushti's propagation advice). A post built at
-  // tip h is then stamped h-1 and lives for blocks h+1 .. h+SLACK-1. The authority box was last stamped one block before
-  // the default world so that the lock (>= SELF + epoch) is met by the h-1 stamp.
+  // tip h is then stamped h-1 and lives for blocks h+1 .. h+SLACK-1. The authority box was last stamped (R7) one block
+  // before the default world so that the lock (>= SELF.R7 + epoch) is met by the h-1 stamp.
   const w = world({ gate: "hotkey", companionHeight: H0 - EPOCH - 1 });
   const h = w.chain.height;
   const tx = spost(w, { prices: [101n, 201n], height: h - 1 });
@@ -855,17 +913,17 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
     tx2, [w2.server], false);
 }
 {
-  // One day at ~2-minute blocks = 720 blocks. Greedy thief: at every block post with the OLDEST successor height the
-  // contract allows (max(SELF + EPOCH, HEIGHT - SLACK)) and pay the WHOLE cap as miner fee every time.
+  // One day at ~2-minute blocks = 720 blocks. Greedy thief: at every block post with the OLDEST post stamp R7 the
+  // contract allows (max(SELF.R7 + EPOCH, HEIGHT - SLACK)) and pay the WHOLE cap as miner fee every time.
   const DAY = 720;
   const w = world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC, companionHeight: HC, oracleHeight: HC, fundHeight: HC, companionValue: 2n * ERG });
   const start = w.chain.height, before = holdings(w), txs = [];
   let cb = companionBox(w);
   while (w.chain.height + 1 <= start + DAY) {
     const HEIGHT = w.chain.height + 1;
-    const created = Math.max(cb.creationHeight + EPOCH, HEIGHT - SLACK);
+    const created = Math.max(stampOf(cb, "R7") + EPOCH, HEIGHT - SLACK);
     if (created <= HEIGHT) {
-      const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succHeight: created, succValue: cb.value - MAX_FEE_PER_EPOCH, fee: MAX_FEE_PER_EPOCH, cb });
+      const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succStamp: created, succValue: cb.value - MAX_FEE_PER_EPOCH, fee: MAX_FEE_PER_EPOCH, cb });
       if (run(w, tx, [w.server]) === "ACCEPTED") { txs.push(tx); cb = companionBox(w); continue; }
     }
     w.chain.newBlock();
@@ -880,15 +938,15 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
 {
   // Same day, TEST-ONLY variant with the lock at the pool's 6 blocks (for the operator's comparison).
   const DAY = 720;
-  const tree6 = compile(HOT_KEY_SRC, { map: { epochLength: SInt(POOL_EPOCH) } }).toHex();
+  const tree6 = authTreeOf(HOT_KEY_SRC, POOL_EPOCH);
   const w = world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC, companionHeight: HC, oracleHeight: HC, fundHeight: HC, companionValue: 2n * ERG, companionTreeOverride: tree6 });
   const start = w.chain.height, txs = [];
   let cb = companionBox(w);
   while (w.chain.height + 1 <= start + DAY) {
     const HEIGHT = w.chain.height + 1;
-    const created = Math.max(cb.creationHeight + POOL_EPOCH, HEIGHT - SLACK);
+    const created = Math.max(stampOf(cb, "R7") + POOL_EPOCH, HEIGHT - SLACK);
     if (created <= HEIGHT) {
-      const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succHeight: created, succValue: cb.value - MAX_FEE_PER_EPOCH, fee: MAX_FEE_PER_EPOCH, cb });
+      const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succStamp: created, succValue: cb.value - MAX_FEE_PER_EPOCH, fee: MAX_FEE_PER_EPOCH, cb });
       if (run(w, tx, [w.server]) === "ACCEPTED") { txs.push(tx); cb = companionBox(w); continue; }
     }
     w.chain.newBlock();
@@ -904,7 +962,7 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
   for (const s of [2, 3, 4]) {
     const src = HOT_KEY_SRC.replace(/val mempoolSlack\s*=\s*\d+/, `val mempoolSlack   = ${s}`);
     if (src === HOT_KEY_SRC && s !== SLACK) throw new Error("slack variant did not apply");
-    const tree = compile(src, { map: { epochLength: SInt(EPOCH) } }).toHex();
+    const tree = authTreeOf(src);
     let life = 0;
     for (let k = 1; k <= EPOCH; k++) {
       const w = world({ gate: "hotkey", companionHeight: H0 - EPOCH - 1, companionTreeOverride: tree });
@@ -916,8 +974,8 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
     const start = w.chain.height, blocks = [];
     while (w.chain.height + 1 <= start + 3 * EPOCH) {
       const HEIGHT = w.chain.height + 1;
-      const created = Math.max(companionBox(w).creationHeight + EPOCH, HEIGHT - s);
-      if (created <= HEIGHT && run(w, spost(w, { prices: [1n, 1n], succHeight: created }), [w.server]) === "ACCEPTED") { blocks.push(HEIGHT - start); continue; }
+      const created = Math.max(stampOf(companionBox(w), "R7") + EPOCH, HEIGHT - s);
+      if (created <= HEIGHT && run(w, spost(w, { prices: [1n, 1n], succStamp: created }), [w.server]) === "ACCEPTED") { blocks.push(HEIGHT - start); continue; }
       w.chain.newBlock();
     }
     const gaps = blocks.slice(1).map((b, i) => b - blocks[i]);
@@ -927,16 +985,24 @@ const idleWorld = () => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SR
       `greedy thief min inclusion gap ${Math.min(...gaps)} (want epoch-slack=${EPOCH - s}); ${blocks.length} posts in ${3 * EPOCH} blocks (bound ${bound}) at [${blocks.join(" ")}]`);
   }
 }
-out.push(`      (MockChain enforces NO consensus creationHeight rule; E1-E3 hold because the contract itself checks created <= HEIGHT and`,
-         `       created >= HEIGHT - ${SLACK}. MockChain's HEIGHT = chain.height + 1, as E1b/E1c's boundaries show.)`);
+out.push(`      (R7 is not a consensus field; E1-E3 hold because the contract itself checks R7 <= HEIGHT and`,
+         `       R7 >= HEIGHT - ${SLACK}. MockChain's HEIGHT = chain.height + 1, as E1b/E1c's boundaries show.)`);
 
 section("B. junk on the successor");
 {
   const w = world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC });
-  attack(w, "E2a hot key posts a successor with a junk R7 (allowed: R7-R9 are not pinned)",
-    spost(w, { prices: [1n, 1n], succR7: bytes(fakeId(0xff)) }), [w.server], true);
+  // Rebased: was "junk R7 (allowed: R7-R9 are not pinned)". R7/R8 are now the stamps, so the junk goes to R9.
+  attack(w, "E2a hot key posts a successor with a junk R9 (allowed: R9 is not pinned; rebased from R7, now the post stamp)",
+    spost(w, { prices: [1n, 1n], succR9: bytes(fakeId(0xff)) }), [w.server], true);
   check("E2b owner still reclaims the junked successor (hot key cannot brick the owner path)",
     run(w, ownerTx(w, { mode: "reclaim" }), [w.owner]), true);
+}
+{
+  const w = world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC });
+  attack(w, "E2a2 (new) hot key writes a junk (Coll[Byte]) successor R7 instead of an Int stamp: rejected",
+    spost(w, { prices: [1n, 1n], succR7: bytes(fakeId(0xff)) }), [w.server], false);
+  attack(w, "E2a3 (new) hot key moves the fee stamp R8 on a post: rejected (a post keeps R8)",
+    spost(w, { prices: [1n, 1n], succR8: SInt(w.chain.height) }), [w.server], false);
 }
 {
   const w = world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC });
@@ -1097,7 +1163,7 @@ for (const [id, label, regs] of [
 //   nft "distinct": four NFTs; four oracle scripts, oracle box i on the script compiled with NFT i
 //   hot "shared":   one hot key in R6 of all four;   hot "distinct": four hot keys (hot0 = the `server` party)
 const NFT4 = [0, 1, 2, 3].map((i) => fakeId(0xd0 + i));
-function fourWorld({ nft = "shared", hot = "distinct", tree = HOT_KEY_TREE, planted = false } = {}) {
+function fourWorld({ nft = "shared", hot = "distinct", tree = HOT_KEY_TREE, planted = false, pool = false } = {}) {
   const chain = new MockChain({ height: H0 });
   const owner = chain.newParty("owner-cold"), owner2 = chain.newParty("owner2-cold"), attacker = chain.newParty("attacker");
   const server = chain.newParty("server"), server2 = chain.newParty("server-rotated");
@@ -1113,12 +1179,14 @@ function fourWorld({ nft = "shared", hot = "distinct", tree = HOT_KEY_TREE, plan
       additionalRegisters: { R4: SGroupElement(owner.key.publicKey).toHex(), R5: SInt(7).toHex(), R6: SColl(SLong, [100n, 200n]).toHex() } }));
     authParty.addUTxOs(mockUTxO({ ergoTree: tree, value: ERG / 10n, creationHeight: H0 - EPOCH,
       assets: [{ tokenId: nftOf(i), amount: 1n }],
-      additionalRegisters: { R4: SGroupElement(owner.key.publicKey).toHex(), R5: bytes(ORACLE_TOKEN).toHex(), R6: SGroupElement(hotParties[i].key.publicKey).toHex() } }));
+      additionalRegisters: { R4: SGroupElement(owner.key.publicKey).toHex(), R5: bytes(ORACLE_TOKEN).toHex(), R6: SGroupElement(hotParties[i].key.publicKey).toHex(),
+                             R7: SInt(H0 - EPOCH).toHex(), R8: SInt(H0 - EPOCH).toHex() } }));
   }
   if (planted) oracleParties[0].addUTxOs(mockUTxO({ ergoTree: oracleTrees[0], value: MIN_RENT * 2n, creationHeight: H0 - 5,
     assets: [{ tokenId: ORACLE_TOKEN, amount: 1n }, { tokenId: REWARD_TOKEN, amount: 1n }],
     additionalRegisters: { R4: SGroupElement(attacker.key.publicKey).toHex(), R5: SInt(7).toHex(), R6: SColl(SLong, [1n, 1n]).toHex() } }));
-  const w = { chain, owner, owner2, server, server2, attacker, hot: hotParties, companionTree: tree, oracleTree: oracleTrees[0], oracleTrees, authParty, oracleParties, nftOf };
+  const poolParty = pool ? addPool(chain) : undefined;
+  const w = { chain, owner, owner2, server, server2, attacker, hot: hotParties, companionTree: tree, oracleTree: oracleTrees[0], oracleTrees, authParty, oracleParties, nftOf, poolParty };
   return w;
 }
 // authority box i / oracle box j (j = owner's box with reward 10+j). Re-read after every tx (box ids change).
@@ -1189,11 +1257,12 @@ function mergeTx(w, a0, a1, burnNft) {
     mergeTx(w, qAuth(w, 0), qAuth(w, 1), NFT4[1]), [w.server], false);
 }
 {
-  // Contrast: the TEST-ONLY pre-patch variant = the real contract with exactly the NFT-input conjunct removed (the
-  // contract as it was before the fix). Same merge tx as Q4: accepted there, so that conjunct is what closes it.
-  const PRE_FRAGMENT = "INPUTS.filter { (b: Box) => b.tokens.size > 0 && b.tokens(0)._1 == myNft }.size == 1 &&\n                   ";
+  // Contrast: the TEST-ONLY pre-patch variant = the real contract with exactly the NFT-input check removed (the
+  // contract as it was before the fix; `oneNftInput` := true). Same merge tx as Q4: accepted there, so that check is
+  // what closes it.
+  const PRE_FRAGMENT = "val oneNftInput = INPUTS.filter { (b: Box) =>\n      b.tokens.size > 0 && b.tokens(0)._1 == myNft\n    }.size == 1";
   if (HOT_KEY_SRC.split(PRE_FRAGMENT).length !== 2) throw new Error("NFT-input fragment not found exactly once");
-  const pretree = compile(HOT_KEY_SRC.replace(PRE_FRAGMENT, ""), { map: { epochLength: SInt(EPOCH) } }).toHex();
+  const pretree = authTreeOf(HOT_KEY_SRC.replace(PRE_FRAGMENT, "val oneNftInput = true"));
   info(`pre-patch variant ergoTree ${pretree.length / 2} B blake2b256[0..8]=${hex.encode(blake2b256(hex.decode(pretree))).slice(0, 16)}; ` +
        `real contract ${HOT_KEY_TREE.length / 2} B blake2b256[0..8]=${hex.encode(blake2b256(hex.decode(HOT_KEY_TREE))).slice(0, 16)}`);
   const w = fourWorld({ nft: "shared", hot: "shared", tree: pretree });
@@ -1229,7 +1298,7 @@ function mergeTx(w, a0, a1, burnNft) {
   attack(w2, "Q6b shared NFT + distinct keys, hot0 stolen: it posts oracle box #3 (any box, one per epoch via its own authority box)",
     qpost(w2, qAuthAll(w2)[0], qOracle(w2, 3)), [w2.hot[0]], true);
   w2.chain.newBlocks(1);
-  attack(w2, "Q6b ... and cannot post a second box in the same epoch (its authority box is height-locked)",
+  attack(w2, "Q6b ... and cannot post a second box in the same epoch (its authority box is post-stamp-locked)",
     qpost(w2, qAuthAll(w2).find((b) => b.creationHeight > H0 - EPOCH), qOracle(w2, 2)), [w2.hot[0]], false);
 }
 {
@@ -1335,7 +1404,7 @@ const fmtRows = (rows) => rows.map((r) => `e${r.k}[R=${r.R - H0} post=${r.posts.
   ` delay=${r.delay}${r.margin === null ? " (others)" : ` fresh+${r.margin}`}]`).join(" ");
 section(`T. MODELLED: only the posts are real transactions; refresh and freshness verdicts come from the model, RefreshContract is not executed here. Cadence timeline on the pool's numbers (pool epochLength ${POOL_EPOCH}, authority lock ${EPOCH}, freshness HEIGHT-${FRESH_WINDOW}, daemon stamp tip-1, slack ${SLACK})`);
 info("heights are offsets from H0; post=stamp@block; refresh@tip; delay = refresh tip - (poolCreated + 7); fresh+m = oracle stamp - (HEIGHT - 12)");
-const treeFor = (E) => compile(HOT_KEY_SRC, { map: { epochLength: SInt(E) } }).toHex();
+const treeFor = (E) => authTreeOf(HOT_KEY_SRC, E);
 {
   for (const stamp of ["back", "full"]) {
     const { rows, problems } = cadence({ tree: HOT_KEY_TREE, refreshStamp: stamp });
@@ -1466,7 +1535,8 @@ section("X. REVIEW: cross-operator, shared NFT id");
   // operator B (= w.attacker) holds a legit NFT unit; plants an authority box with A's owner key in R4, B's key in R6
   w.authParty.addUTxOs(mockUTxO({ ergoTree: w.companionTree, value: ERG / 10n, creationHeight: H0 - EPOCH,
     assets: [{ tokenId: COMPANION_NFT, amount: 1n }],
-    additionalRegisters: { R4: SGroupElement(w.owner.key.publicKey).toHex(), R5: bytes(ORACLE_TOKEN).toHex(), R6: SGroupElement(w.attacker.key.publicKey).toHex() } }));
+    additionalRegisters: { R4: SGroupElement(w.owner.key.publicKey).toHex(), R5: bytes(ORACLE_TOKEN).toHex(), R6: SGroupElement(w.attacker.key.publicKey).toHex(),
+                           R7: SInt(H0 - EPOCH).toHex(), R8: SInt(H0 - EPOCH).toHex() } }));
   const planted = qAuthAll(w).find((b) => b.additionalRegisters.R6 === SGroupElement(w.attacker.key.publicKey).toHex());
   check("X1 operator B's planted authority box (R4 = A's owner key, R6 = B's key) posts junk into A's oracle box, signed by B only",
     run(w, qpost(w, planted, qOracle(w, 0), { prices: [1n, 1n] }), [w.attacker]), true);
@@ -1477,6 +1547,296 @@ section("X. REVIEW: cross-operator, shared NFT id");
   const fund = w.attacker.utxos.toArray()[0];
   check("X2 top-up inside a post: extra wallet input, all of it lands in the successor, no owner key",
     run(w, qpost(w, cb, qOracle(w, 0), { extraInputs: [new ErgoUnsignedInput(fund)], succValue: cb.value + fund.value - POST_FEE }), [w.hot[0], w.attacker]), true);
+}
+
+// ───────────────────────────── F: refresh-fee path (context var 1 = 1) ─────────────────────────────
+// Refresh-shaped fee spend (the pool box is the TEST-ONLY stand-in above; no refresh contract runs here):
+//   INPUTS  = [...lead, pool, oracle (collected via the valuefix collection path), authority (ctx var 1 = 1), ...extraInputs]
+//   OUTPUTS = [...leadOutputs, pool', oracle' (reward + 1, R4 only), authority' (R7 kept, R8 = stamp), ...extraOutputs, minerFee]
+// loss = what the authority box gives up (default POST_FEE); fee = the miner-fee box (default = loss). Leftover -> changeTo.
+const MAX_REFRESH_FEE = BigInt(srcConst("maxRefreshFee"));
+const poolBox = (w) => w.poolParty.utxos.toArray()[0];
+function fpost(w, { loss = POST_FEE, fee, stamp, value, assets, r4, r5, r6, r7, r8, var1 = 1, withPool = true, withOracle = true,
+                    oracleRewrite = false, lead = [], leadOutputs = [], extraInputs = [], extraOutputs = [], changeTo = w.attacker.address,
+                    height = w.chain.height, cb = companionBox(w), ob = withOracle ? oracleBox(w) : undefined, pb = withPool ? poolBox(w) : undefined } = {}) {
+  const inputs = [...lead], outputs = [...leadOutputs];
+  const collected = withOracle && !oracleRewrite;
+  if (withPool) {
+    inputs.push(new ErgoUnsignedInput(pb));
+    outputs.push(new OutputBuilder(pb.value, pb.ergoTree).addTokens([pb.assets[0],
+      { tokenId: pb.assets[1].tokenId, amount: BigInt(pb.assets[1].amount) - (collected ? 1n : 0n) }]));
+  }
+  if (withOracle) {
+    const idx = inputs.length;
+    inputs.push(oracleIn(ob, idx));
+    // collected: reward + 1, R4 only (the collection path). oracleRewrite: same tokens and value, a NEW datapoint in R5/R6
+    // (the oracle contract's companion path, which only asks for the authority box among the inputs).
+    outputs.push(oracleRewrite ? oracleOut(ob, { prices: [666n, 666n], epoch: 99 })
+      : new OutputBuilder(ob.value, ob.ergoTree).addTokens([ob.assets[0], { tokenId: ob.assets[1].tokenId, amount: BigInt(ob.assets[1].amount) + 1n }])
+        .setAdditionalRegisters({ R4: ob.additionalRegisters.R4 }));
+  }
+  const ci = new ErgoUnsignedInput(cb);
+  if (var1 !== undefined) ci.setContextExtension({ 1: SInt(var1) });
+  inputs.push(ci);
+  outputs.push(successorOf(w, cb, { value: value ?? cb.value - loss, assets, r4, r5, r6,
+    r7: r7 ?? cb.additionalRegisters.R7, r8: r8 ?? SInt(stamp ?? height) }));
+  return buildSF(w, { inputs: [...inputs, ...extraInputs], outputs: [...outputs, ...extraOutputs], fee: fee === undefined ? loss : fee, changeTo, height });
+}
+const feeWorld = (o = {}) => world({ gate: "hotkey", oracleSrc: ORACLE_V2_VALUEFIX_SRC, pool: true, ...o });
+const shapeOf = (w, tx) => { const o = tx.toEIP12Object(); return `inputs=[${o.inputs.map((b) => kindOf(w, b.ergoTree))}] outputs=[${o.outputs.map((b) => kindOf(w, b.ergoTree))}]`; };
+// TEST-ONLY variants of the real contract with exactly one fee-path check switched off (each replacement must apply once).
+const variantTree = (from, to) => {
+  if (HOT_KEY_SRC.split(from).length !== 2) throw new Error(`variant fragment not found exactly once: ${from}`);
+  return authTreeOf(HOT_KEY_SRC.replace(from, to));
+};
+
+section("F. REFRESH FEE path (posting key signs, context var 1 = 1 on the authority input): stand-in pool controls and attacks; no refresh contract accepts this branch yet");
+info(`maxRefreshFee = ${MAX_REFRESH_FEE} (parsed from the contract); pool box = TEST-ONLY stand-in at INPUTS(0); no refresh contract is executed`);
+{
+  const w = feeWorld();
+  const cb = companionBox(w);
+  const tx = fpost(w);
+  attack(w, "F1 refresh fee against a STAND-IN pool (no refresh contract accepts the fee branch yet): pool NFT box at INPUTS(0), oracle collected, authority var 1 = 1, R8 := stamp, loss = miner fee, posting key only", tx, [w.server], true);
+  const s = companionBox(w);
+  out.push(`      ${shapeOf(w, tx)}  authority ${cb.value} -> ${s.value} (miner fee ${sumFee([tx])}); R7 ${stampOf(cb, "R7")} -> ${stampOf(s, "R7")}, R8 ${stampOf(cb, "R8")} -> ${stampOf(s, "R8")}`);
+}
+{
+  const w = feeWorld();
+  checkWhy(w, "F1 control: identical tx, nobody signs", fpost(w), [], false);
+}
+{
+  const w = feeWorld();
+  attack(w, `F1b refresh fee (stand-in pool) paying the whole cap (loss = fee = ${MAX_REFRESH_FEE})`, fpost(w, { loss: MAX_REFRESH_FEE }), [w.server], true);
+}
+{
+  // A top-up inside the fee spend: the successor ends up richer than SELF (loss < 0); allowed.
+  const w = feeWorld();
+  const cb = companionBox(w), donor = w.attacker.utxos.toArray()[0];
+  attack(w, "F1c refresh fee with a top-up inside the tx (successor value > SELF; the donor's ERG lands in the successor)",
+    fpost(w, { value: cb.value + donor.value - POST_FEE, fee: POST_FEE, extraInputs: [donor] }), [w.server, w.attacker], true);
+}
+{
+  const w = feeWorld();
+  attack(w, `F2 refresh fee over the cap: loss = fee = ${MAX_REFRESH_FEE + 1n} (control: F1b)`, fpost(w, { loss: MAX_REFRESH_FEE + 1n }), [w.server], false);
+}
+{
+  // MockChain mines one block per accepted tx, so the next tx is built at tip h+1.
+  const w = feeWorld();
+  const h = w.chain.height;
+  attack(w, "F3 setup: honest refresh fee at tip h (R8 := h)", fpost(w), [w.server], true);
+  attack(w, `F3 two refresh fee spends inside one epoch: the second, at tip h+${w.chain.height - h} (R8 = h+${w.chain.height - h} < h + ${EPOCH}), is rejected`,
+    fpost(w), [w.server], false);
+  w.chain.newBlocks(h + EPOCH - w.chain.height);
+  attack(w, `F3 control: the same spend at tip h+${w.chain.height - h} (R8 = h + ${EPOCH}) is accepted`, fpost(w), [w.server], true);
+}
+{
+  // Fee-stamp window. Idle box (R8 far in the past), so only the HEIGHT window can reject.
+  const idleFee = () => feeWorld({ companionHeight: HC, oracleHeight: HC, fundHeight: HC });
+  let w = idleFee();
+  attack(w, "F4a refresh fee with R8 = HEIGHT + 1 (future-dated fee stamp)", fpost(w, { stamp: w.chain.height + 2 }), [w.server], false);
+  w = idleFee();
+  attack(w, "F4a control: R8 = HEIGHT", fpost(w, { stamp: w.chain.height + 1 }), [w.server], true);
+  w = idleFee();
+  attack(w, `F4b refresh fee with R8 = HEIGHT - ${SLACK + 1} (older than the slack window)`, fpost(w, { stamp: w.chain.height + 1 - SLACK - 1 }), [w.server], false);
+  w = idleFee();
+  attack(w, `F4b control: R8 = HEIGHT - ${SLACK}`, fpost(w, { stamp: w.chain.height + 1 - SLACK }), [w.server], true);
+  w = idleFee();
+  attack(w, "F4c refresh fee with R8 not advanced (= SELF.R8)", fpost(w, { r8: SInt(HC) }), [w.server], false);
+}
+{
+  const w = feeWorld();
+  attack(w, "F5 refresh fee that also advances the post stamp R7 (a post-lock reset riding on the fee spend)",
+    fpost(w, { r7: SInt(w.chain.height) }), [w.server], false);
+  attack(w, "F5b refresh fee that writes a wrong-typed R7 (Coll[Byte])", fpost(w, { r7: bytes(fakeId(0xff)) }), [w.server], false);
+}
+{
+  const w = feeWorld();
+  attack(w, "F6a refresh fee rewrites R4 (owner key) to the thief's key", fpost(w, { r4: SGroupElement(w.attacker.key.publicKey) }), [w.server], false);
+  attack(w, "F6b refresh fee rebinds R5 to another oracle-token id", fpost(w, { r5: bytes(ORACLE_TOKEN_2) }), [w.server], false);
+  attack(w, "F6c refresh fee rewrites R6 (posting key) to the thief's key", fpost(w, { r6: SGroupElement(w.attacker.key.publicKey) }), [w.server], false);
+}
+{
+  const w = feeWorld({ companionExtraAssets: [{ tokenId: EXTRA_TOKEN, amount: 5n }] });
+  // The extra tokens leave with the thief's change; the thief's own box carries them (ERG for the change box).
+  attack(w, "F7 refresh fee drops the extra tokens from the successor (to the thief's change box)",
+    fpost(w, { assets: [{ tokenId: COMPANION_NFT, amount: 1n }], extraInputs: w.attacker.utxos.toArray() }), [w.server, w.attacker], false);
+  attack(w, "F7 control: same world, successor keeps the full token list", fpost(w), [w.server], true);
+}
+{
+  const w = feeWorld();
+  attack(w, `F8 miner fee < loss: authority loses ${MAX_REFRESH_FEE}, miner fee ${POST_FEE}, the ${MAX_REFRESH_FEE - POST_FEE} difference to a thief change box`,
+    fpost(w, { loss: MAX_REFRESH_FEE, fee: POST_FEE }), [w.server], false);
+}
+{
+  const w = feeWorld();
+  const donor = w.attacker.utxos.toArray()[0];
+  attack(w, "F9 thief adds its own input and takes exactly its value back in a change box; miner fee = loss: accepted, nets nothing",
+    fpost(w, { extraInputs: [donor], extraOutputs: [new OutputBuilder(donor.value, w.attacker.address)] }), [w.server, w.attacker], true);
+}
+{
+  const w = feeWorld();
+  const donor = w.attacker.utxos.toArray()[0];
+  checkWhy(w, "F10a no pool box: INPUTS(0) is the thief's token-less wallet box (returned): rejected, and the guarded INPUTS(0) read does not throw (reduced: companion = owner)",
+    fpost(w, { withPool: false, withOracle: false, lead: [donor], leadOutputs: [new OutputBuilder(donor.value, w.attacker.address)] }), [w.server, w.attacker], false);
+  w.attacker.addBalance({ nanoergs: SAFE_MIN_BOX_VALUE, tokens: [{ tokenId: EXTRA_TOKEN, amount: 1n }] });
+  const tokBox = w.attacker.utxos.toArray().find((b) => b.assets.length);
+  attack(w, "F10b no pool box: INPUTS(0) carries a token that is not the pool NFT", fpost(w, { withPool: false, withOracle: false, lead: [tokBox],
+    leadOutputs: [new OutputBuilder(tokBox.value, w.attacker.address).addTokens(tokBox.assets)] }), [w.server, w.attacker], false);
+}
+{
+  // The second-post attack the pool-NFT check exists for: a fee spend in a NON-pool tx, plus the owner's oracle box,
+  // which passes through the oracle contract's companion path (authority box present, same R4) with a new datapoint.
+  const rewrite = (w) => spost(w, { prices: [666n, 666n], epoch: 99, companionExt: { 1: SInt(1) },
+    succR7: companionBox(w).additionalRegisters.R7, succR8: SInt(w.chain.height) });
+  const w = feeWorld();
+  attack(w, "F11 refresh-fee path used to rewrite the owner's oracle box via the oracle's companion path in a non-pool tx (a second post per period)",
+    rewrite(w), [w.server], false);
+  const vtree = variantTree("val inPoolTx = firstTokenId == poolNftId", "val inPoolTx = true");
+  const wv = feeWorld({ companionTreeOverride: vtree });
+  const before = oracleBox(wv).additionalRegisters.R6;
+  attack(wv, "F11 FINDING (contrast, TEST-ONLY variant without the pool-NFT check): the same rewrite is accepted — the posting key writes a datapoint the post lock never saw",
+    rewrite(wv), [wv.server], true);
+  out.push(`      variant ${vtree.length / 2} B; oracle R6 ${before} -> ${oracleBox(wv).additionalRegisters.R6}`);
+}
+{
+  // KNOWN LIMIT outside this contract: inside a pool-NFT tx the owner's oracle box can still pass through the oracle
+  // contract's companion path (new datapoint, same tokens and value) instead of being collected. Neither the authority
+  // contract nor the oracle contract refuses that; the pool's refresh contract must (RefreshContractKeyless.es pins every
+  // oracle-token input to R4-only + reward +2; the deployed RefreshContract.es does not). The stand-in pool here does not.
+  const w = feeWorld();
+  attack(w, "F11b KNOWN LIMIT (outside this contract): in a pool-NFT tx the fee spend lets the owner's oracle box take a NEW datapoint via the companion path; only the pool's refresh contract can refuse it",
+    fpost(w, { oracleRewrite: true }), [w.server], true);
+}
+{
+  // Two authority boxes, one shared NFT id and one shared posting key: merge into ONE successor, box #1's ERG -> miner fee.
+  const w = fourWorld({ nft: "shared", hot: "shared", pool: true });
+  const [a0, a1] = qAuthAll(w), pb = poolBox(w);
+  const b = new TransactionBuilder(w.chain.height)
+    .from([new ErgoUnsignedInput(pb), new ErgoUnsignedInput(a0).setContextExtension({ 1: SInt(1) }), new ErgoUnsignedInput(a1).setContextExtension({ 1: SInt(1) })], { ensureInclusion: true })
+    .to([new OutputBuilder(pb.value, pb.ergoTree).addTokens(pb.assets),
+         successorOf(w, a0, { value: a0.value - POST_FEE, r7: a0.additionalRegisters.R7, r8: SInt(w.chain.height) })])
+    .sendChangeTo(w.attacker.address).payFee(a1.value + POST_FEE);
+  b.burnTokens({ tokenId: COMPANION_NFT, amount: 1n });
+  attack(w, `F12a shared NFT + shared key: MERGE two authority boxes through the fee path (box #1's ${a1.value} -> miner fee): rejected (NFT-input check)`, b.build(), [w.server], false);
+}
+{
+  // Distinct NFTs (each box passes its NFT-input check), one shared posting key: both boxes take the fee path and each
+  // counts the SAME miner-fee box as covering its own loss; the second loss leaves as change to the thief.
+  const doubleCount = (w, fee) => {
+    const a0 = qAuth(w, 0), a1 = qAuth(w, 1), pb = poolBox(w);
+    return buildSF(w, {
+      inputs: [new ErgoUnsignedInput(pb), new ErgoUnsignedInput(a0).setContextExtension({ 1: SInt(1) }), new ErgoUnsignedInput(a1).setContextExtension({ 1: SInt(1) })],
+      outputs: [new OutputBuilder(pb.value, pb.ergoTree).addTokens(pb.assets),
+                successorOf(w, a0, { value: a0.value - MAX_REFRESH_FEE, r7: a0.additionalRegisters.R7, r8: SInt(w.chain.height) }),
+                successorOf(w, a1, { value: a1.value - MAX_REFRESH_FEE, r7: a1.additionalRegisters.R7, r8: SInt(w.chain.height) })],
+      fee });
+  };
+  const w = fourWorld({ nft: "distinct", hot: "shared", pool: true });
+  attack(w, `F12b distinct NFTs + shared key: two fee spends share ONE miner fee (${MAX_REFRESH_FEE}); the other ${MAX_REFRESH_FEE} -> thief change: rejected (only input at this script)`,
+    doubleCount(w, MAX_REFRESH_FEE), [w.server], false);
+  const vtree = variantTree("val oneScriptInput = INPUTS.filter { (b: Box) =>\n        b.propositionBytes == SELF.propositionBytes\n      }.size == 1",
+    "val oneScriptInput = true");
+  const wv = fourWorld({ nft: "distinct", hot: "shared", pool: true, tree: vtree });
+  const before = holdings(wv);
+  const tx = doubleCount(wv, MAX_REFRESH_FEE);
+  const got = run(wv, tx, [wv.server]);
+  check(`F12b FINDING (contrast, TEST-ONLY variant = the spec's checks without "only input at this script"): the double-count is accepted`, got, true);
+  record(`F12b (contrast, TEST-ONLY variant without the one-script-input check) double-counted miner fee`, before, holdings(wv), got, tx, { expectGain: true });
+  const w2 = fourWorld({ nft: "distinct", hot: "shared", pool: true });
+  checkWhy(w2, `F12c KNOWN LIMIT (deliberate): two fee spends paying ${2n * MAX_REFRESH_FEE} in full are rejected too — one authority fee spend per tx`,
+    doubleCount(w2, 2n * MAX_REFRESH_FEE), [w2.server], false);
+}
+
+section("F. owner path with missing / wrong-typed stamps; migration");
+{
+  const w = world({ gate: "hotkey", stampRegs: "none" });
+  check("F13a owner reclaims a box with NO R7/R8 (the pre-stamp layout)", run(w, ownerTx(w, { mode: "reclaim" }), [w.owner]), true);
+  const w2 = world({ gate: "hotkey", stampRegs: "none" });
+  check("F13a owner rotates IN PLACE a box with NO R7/R8 (same-script successor, R6 := new key)",
+    run(w2, ownerTx(w2, { mode: "rotate", newR6: SGroupElement(w2.server2.key.publicKey) }), [w2.owner]), true);
+}
+{
+  const wrong = { R7: bytes(fakeId(0x07)).toHex(), R8: SLong(5n).toHex() };
+  const w = world({ gate: "hotkey", stampRegs: wrong });
+  check("F13b owner reclaims a box with wrong-typed R7 (Coll[Byte]) and R8 (Long)", run(w, ownerTx(w, { mode: "reclaim" }), [w.owner]), true);
+  const w2 = world({ gate: "hotkey", stampRegs: wrong });
+  check("F13b owner rotates IN PLACE a box with wrong-typed R7/R8", run(w2, ownerTx(w2, { mode: "rotate", newR6: SGroupElement(w2.server2.key.publicKey) }), [w2.owner]), true);
+}
+{
+  const w = feeWorld({ stampRegs: "none" });
+  attack(w, "F13c posting key posts from a box with NO R7/R8 (SELF.R7 read throws inside the guard)", spost(w), [w.server], false);
+  attack(w, "F13c posting key takes the fee path on a box with NO R7/R8 (SELF.R8 read throws inside the guard)",
+    fpost(w, { r7: SInt(w.chain.height) }), [w.server], false);
+  // Migration: the owner writes R7/R8 in place; the posting key can then post.
+  check("F13d migration: owner rewrites the box in place adding R7 = R8 = Int stamps",
+    run(w, ownerTx(w, { mode: "custom", outputs: (cb) => new OutputBuilder(cb.value, w.companionTree).addTokens(cb.assets)
+      .setAdditionalRegisters({ ...cb.additionalRegisters, R7: SInt(H0 - EPOCH), R8: SInt(H0 - EPOCH) }) }), [w.owner]), true);
+  attack(w, "F13d ... and the posting key posts from the migrated box", spost(w), [w.server], true);
+}
+
+section("F. the two stamps are independent: a refresh fee spend does not move the posting lock");
+{
+  // Default world: R7 = R8 = h - EPOCH. MockChain mines one block per accepted tx, so each tx below is built at the
+  // next tip. Under the old creation-height lock the fee spend at h+1 would have recreated the box and pushed the next
+  // post to >= h+1+EPOCH.
+  const w = feeWorld();
+  const h = w.chain.height;
+  const at = () => `h+${w.chain.height - h}`;
+  attack(w, "F14a post at tip h (R7 := h)", spost(w), [w.server], true);
+  const feeAt = w.chain.height;
+  attack(w, `F14b refresh fee right after the post, at tip ${at()} (R8 := ${at()}; R7 and the post lock untouched; box recreated at ${at()})`, fpost(w), [w.server], true);
+  attack(w, `F14c a post at tip ${at()} is still rejected: too soon after the PREVIOUS POST (the fee spend neither resets nor bypasses the post lock)`,
+    spost(w, { prices: [2n, 2n] }), [w.server], false);
+  w.chain.newBlocks(h + EPOCH - w.chain.height);
+  const ok = feeAt + EPOCH > w.chain.height;   // this tip would fail the old creation-height lock
+  attack(w, `F14d post at tip ${at()}: ${EPOCH} blocks after the previous post, ${w.chain.height - feeAt} after the fee spend that recreated the box — accepted` +
+    (ok ? ` (the old creation-height lock would have refused it until h+${feeAt + EPOCH - h})` : " (HARNESS: does not separate old/new lock)"),
+    spost(w, { prices: [3n, 3n] }), [w.server], ok);
+  const s = companionBox(w);
+  out.push(`      authority box now: created h+${s.creationHeight - h}, R7 = h+${stampOf(s, "R7") - h}, R8 = h+${stampOf(s, "R8") - h}`);
+}
+{
+  const w = feeWorld();
+  attack(w, "F14e refresh fee at tip h", fpost(w), [w.server], true);
+  attack(w, "F14e ... and a post immediately after it (next block: MockChain mines one block per tx; the post stamp is untouched by the fee spend): accepted", spost(w), [w.server], true);
+}
+{
+  const w = feeWorld();
+  attack(w, "F15a post with context var 1 = 0 (any Int other than 1 selects the post path): accepted", spost(w, { companionExt: { 1: SInt(0) } }), [w.server], true);
+  const w2 = feeWorld();
+  attack(w2, "F15b post-shaped tx with context var 1 = 1 (selects the fee path; no pool NFT at INPUTS(0)): rejected", spost(w2, { companionExt: { 1: SInt(1) } }), [w2.server], false);
+}
+{
+  // Worst case per authority box per day: a greedy thief with the posting key posts AND takes the fee path as often as the
+  // two stamps allow (oldest stamp max(SELF + EPOCH, HEIGHT - SLACK) on each), paying the full cap on each spend.
+  // Every fee spend sits in a refresh-shaped tx with the pool stand-in (in reality one valid refresh per spend is needed).
+  const DAY = 720;
+  const w = feeWorld({ companionHeight: HC, oracleHeight: HC, fundHeight: HC, companionValue: 2n * ERG });
+  const start = w.chain.height, before = holdings(w), txs = [];
+  let posts = 0, fees = 0;
+  while (w.chain.height + 1 <= start + DAY) {
+    const HEIGHT = w.chain.height + 1;
+    let moved = false;
+    let cb = companionBox(w);
+    const ps = Math.max(stampOf(cb, "R7") + EPOCH, HEIGHT - SLACK);
+    if (ps <= HEIGHT) {
+      const tx = spost(w, { prices: [BigInt(HEIGHT), 1n], succStamp: ps, succValue: cb.value - MAX_FEE_PER_EPOCH, fee: MAX_FEE_PER_EPOCH, cb });
+      if (run(w, tx, [w.server]) === "ACCEPTED") { txs.push(tx); posts++; moved = true; }
+    }
+    cb = companionBox(w);
+    const fs = Math.max(stampOf(cb, "R8") + EPOCH, HEIGHT - SLACK);
+    if (fs <= HEIGHT) {
+      const tx = fpost(w, { stamp: fs, loss: MAX_REFRESH_FEE, withOracle: false, cb });
+      if (run(w, tx, [w.server]) === "ACCEPTED") { txs.push(tx); fees++; moved = true; }
+    }
+    if (!moved) w.chain.newBlock();
+  }
+  const bound = 1 + Math.floor((DAY - 1 + SLACK) / EPOCH);
+  const burned = sumFee(txs), cap = BigInt(bound) * (MAX_FEE_PER_EPOCH + MAX_REFRESH_FEE);
+  const bad = posts > bound || fees > bound || burned > cap;
+  check(`F16 greedy thief over ${DAY} blocks, posts + refresh fees at the full caps: more than ${bound} of either or > ${bound} x (maxFeePerEpoch + maxRefreshFee) = ${cap} burned`,
+    bad ? `ACCEPTED (posts ${posts}, fee spends ${fees}, ${burned} burned)` : `REJECTED (posts ${posts}, fee spends ${fees}, ${burned} nanoERG burned to miners = ${Number(burned) / 1e9} ERG/day)`, false);
+  record(`F16 greedy thief, ${posts} posts + ${fees} fee spends in ${DAY} blocks at the full caps`, before, holdings(w), `ACCEPTED (${posts + fees} spends)`, txs);
 }
 
 // ───────────────────────────── Thief ledger ─────────────────────────────

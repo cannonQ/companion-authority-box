@@ -14,7 +14,7 @@ import os from "os";
 import path from "path";
 import { MockChain, mockUTxO, mockHeaders } from "@fleet-sdk/mock-chain";
 import { FEE_CONTRACT, ErgoAddress } from "@fleet-sdk/core";
-import { estimateBoxSize } from "@fleet-sdk/serializer";
+import { estimateBoxSize, decode } from "@fleet-sdk/serializer";
 import * as SR from "ergo-lib-wasm-nodejs";
 import { main, buildContext, computeBudget, loadContracts, keyFromSecret, C } from "./smoke.mjs";
 
@@ -126,9 +126,11 @@ async function run(args, { echo = true } = {}) {
 const state = () => JSON.parse(fs.readFileSync(path.join(DIR, "state.json"), "utf-8"));
 const lastSubmitted = () => submitted[submitted.length - 1];
 const treeLabel = (st, t) => t === st.contracts?.oracleTree ? "oracle" : t === st.contracts?.authorityTree ? "authority" : t === FEE_CONTRACT ? "fee" : t.startsWith("0008cd") ? "P2PK" : "other";
+// The posting lock is the authority box's R7 post stamp (Int), not its creation height.
+const r7Of = (b) => Number(decode(b.additionalRegisters.R7).data);
 async function waitUnlock() {
   const st = state();
-  const need = st.boxes.authority.creationHeight + C.EPOCH_LENGTH + 1;
+  const need = r7Of(st.boxes.authority) + C.EPOCH_LENGTH + 1;
   if (chain.height < need) chain.newBlocks(need - chain.height);
   return need;
 }
@@ -207,9 +209,10 @@ chain.newBlock();
   check("setup: oracle box = 0.01 ERG, tokens [oracle 1, reward 2], R4/R5/R6, at the oracle script",
     ob.value === "10000000" && ob.ergoTree === st.contracts.oracleTree && ob.assets[0].tokenId === st.tokens.oracle && ob.assets[0].amount === "1"
     && ob.assets[1].tokenId === st.tokens.reward && ob.assets[1].amount === "2" && ["R4", "R5", "R6"].every((x) => ob.additionalRegisters[x]));
-  check("setup: authority box = NFT at tokens(0), R4 owner, R5 oracle token id, R6 posting key",
+  check("setup: authority box = NFT at tokens(0), R4 owner, R5 oracle token id, R6 posting key, R7 = R8 = setup stamp (Int)",
     ab.assets.length === 1 && ab.assets[0].tokenId === st.tokens.nft && ab.additionalRegisters.R4 === "07" + K.owner.pk
-    && ab.additionalRegisters.R5 === "0e20" + st.tokens.oracle && ab.additionalRegisters.R6 === "07" + K.posting.pk, `authority value ${ab.value}`);
+    && ab.additionalRegisters.R5 === "0e20" + st.tokens.oracle && ab.additionalRegisters.R6 === "07" + K.posting.pk
+    && r7Of(ab) === ab.creationHeight && Number(decode(ab.additionalRegisters.R8).data) === ab.creationHeight, `authority value ${ab.value}`);
   noBurnSoFar("setup");
 }
 

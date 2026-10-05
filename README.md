@@ -1,4 +1,4 @@
-# Companion Authority Box: oracle posting with a no-spend key on the operator's server
+# Companion Authority Box: oracle posting with a posting-only key on the operator's server
 
 > **Status: proof of concept, for review. Not in use on any live pool.**
 > Posting worked on mainnet with dummy tokens on 2026-10-03. Keyless refresh is designed and simulator-tested only (see [The goal](#the-goal-a-remote-box-with-limited-authority)).
@@ -11,27 +11,27 @@ For a pool that secures a stablecoin of real value, that is too much risk to pla
 
 The goal is to cut what the operator's server can do down to the job it performs, and nothing more:
 
-1. **The operator's server may hold a key, but that key must have no spending power.** It cannot move ERG or tokens to any address, and it owns no funded address. A smaller funded wallet on the operator's server does not meet this goal; it is the same risk at a lower amount.
+1. **The operator's server may hold a key, but that key must not be able to move value to anyone.** It cannot send ERG or tokens to any address it chooses, and it owns no funded address. What it can do is exact and capped: write datapoints into the operator's own oracle box, and spend contract-capped fees to miners only. A smaller funded wallet on the operator's server does not meet this goal; it is the same risk at a lower amount.
 2. **Everything of value is controlled by an owner key that never touches the operator's server.** That covers ERG, the oracle token, rewards, and the right to rotate or revoke the key on the operator's server.
-3. **A fully compromised operator's server costs a bounded, known amount.** That means wrong datapoints until the owner rotates the key, plus at most a contract-capped fee per post burned to miners.
+3. **A fully compromised operator's server costs a bounded, known amount.** That means wrong datapoints until the owner's recovery transaction, plus contract-capped fees burned to miners.
 4. **The operator's routine setup should be safe by default**, without depending on the operator hardening their server correctly.
 
-This repo meets rules 1 to 3 for **posting**. The operator's server keeps one **posting key**, which can update the operator's own oracle box and spend nothing else. The posting fee comes out of an on-chain authority box under a contract cap, so the operator's server holds no ERG.
+This repo meets rules 1 to 3 for **posting**. The operator's server keeps one **posting key**, which can update the operator's own oracle box and pay capped fees to miners from an on-chain authority box, and nothing else. The operator's server holds no ERG. [`INVARIANTS.md`](INVARIANTS.md) lists exactly what a stolen posting key can and cannot do, and the setup rules those guarantees depend on.
 
-**Refresh** is designed but not proven. With the standard refresh contract, a refresh needs an oracle owner signature, and a pool needs at least one refresher, so at least one operator per pool would still hold an owner key online. The keyless design closes that. Each post also writes the posting key into the oracle box's R7. A new refresh contract then accepts a refresh signed by the R7 key of any collected oracle box, pays the fee from the refresh box under a cap, and wipes R7 on collection. The current contracts in this repo already allow a post to write R7. The refresh side has been tested only in a simulator, against the AVL pool's refresh contract. It is not audited, has not run on mainnet, and is not in this repo yet. Rule 4 is not delivered either: rotation and refills need offline-signed transactions, and production tooling for that does not exist yet. Any proposal for refresh, or any alternative design, should be judged against the four rules above.
+**Refresh** is designed but not proven. With the standard refresh contract, a refresh needs an oracle owner signature, and a pool needs at least one refresher, so at least one operator per pool would still hold an owner key online. The keyless design closes that. Each post also writes the posting key into the oracle box's R7. A new refresh contract then accepts a refresh signed by the R7 key of any collected oracle box, and wipes R7 on collection. The refresher pays the miner fee from its own authority box, through the authority contract's capped refresh-fee branch, so a compromised key can only burn its own operator's fund. The authority contract in this repo already has that branch, and already lets a post write R7. The refresh side has been tested only in a simulator, against the AVL pool's refresh contract. It is not audited, has not run on mainnet, and is not in this repo yet. Rule 4 is not delivered either: rotation and refills need offline-signed transactions, and production tooling for that does not exist yet. Any proposal for refresh, or any alternative design, should be judged against the four rules above.
 
 ### What a compromised server costs
 
-Even an operator with a minimal, dedicated oracle wallet (just the oracle token, rewards and fee dust) risks more than that wallet today. A thief holding the owner key can rewrite the oracle box's R4 to their own key. The oracle token stays in the box, and the thief now owns the seat: they collect its rewards and post its datapoints for good. Oracle tokens cannot be revoked, so the operator cannot take the seat back without a pool update.
+Even an operator with a minimal, dedicated oracle wallet (just the oracle token, rewards and fee dust) risks more than that wallet today. A thief holding the owner key can rewrite the oracle box's R4 to their own key. The oracle token stays in the box, and the thief now owns the seat: they collect its rewards and post its datapoints until a pool update reissues oracle tokens. Oracle tokens cannot be revoked, so the operator cannot take the seat back without a pool update, and every operator has to re-seed.
 
 | What a thief with full access to the operator's server gets | Today (mnemonic on the server) | This design (posting key only) |
 | :--- | :--- | :--- |
 | ERG on the server | all of it | none; the server holds none |
-| The oracle seat | taken for good: R4 rewritten to the thief's key | kept: a post cannot change R4 |
+| The oracle seat | taken until a pool update: R4 rewritten to the thief's key | kept: a post cannot change R4 |
 | Reward tokens | withdrawn to the thief | cannot be moved |
-| Datapoints | any price, for as long as they hold the seat | wrong prices until the owner rotates the key |
-| Fees | not applicable | at most 0.002 ERG per post burned to miners, about 0.29 ERG/day |
-| Recovery | none without a pool update | one owner-signed rotation |
+| Datapoints | any price, for as long as they hold the seat | wrong prices until the owner's recovery transaction |
+| Fees | not applicable | burned to miners only: at most 0.002 ERG per post and 0.002 ERG per refresh fee, at most about 0.58 ERG/day |
+| Recovery | none without a pool update | one owner-signed recovery transaction |
 
 What this does **not** protect is price integrity while a box is compromised. A stolen posting key still posts wrong prices until it is rotated. The pool relies on the median and outlier filtering for that, as it does today. What changes is that a compromised operator can recover their seat without a pool update.
 
@@ -50,17 +50,21 @@ Next to the oracle box sits an **authority box**. It holds the operator's single
 | R4 | owner key (kept cold) |
 | R5 | oracle token id |
 | R6 | posting key (the only key on the operator's server) |
+| R7 | post stamp: height of the last post |
+| R8 | refresh-fee stamp: height of the last refresh-fee spend |
 
 A post spends the oracle box and the authority box together, signed by the posting key. The authority contract allows that only if:
 
 - the oracle box comes back with the same script, tokens and value, and its R4 matches the authority box's R4;
 - the only other outputs are the authority box itself and a miner fee. There is no change output, so the ERG of any extra input can only go into the authority box or to the miner;
 - the authority box gives up at most 0.002 ERG and keeps its NFT and registers;
-- the authority box's new creation height is at least `epochLength` above the previous one, and within `mempoolSlack` (4) blocks of the current height.
+- the new post stamp (R7) is at least `epochLength` above the previous one, and within `mempoolSlack` (4) blocks of the current height; the refresh-fee stamp (R8) is unchanged.
 
 `epochLength` is a compile constant, set to match the pool's epoch. The value used here, 5, gives one post per epoch on pools with 6-block epochs, such as the AVL and USD pools. A pool with longer epochs compiles a larger value.
 
-The lock is on **creation height**, not on blocks between inclusions. Two posts can be mined as little as `epochLength - mempoolSlack` blocks apart, which is 1 block with these settings. Over a window of W blocks, at most 1 + (W − 1 + `mempoolSlack`) / `epochLength` posts can land, which is 145 per day at these settings.
+The lock is on the **post stamp**, not on blocks between inclusions. Two posts can be mined as little as `epochLength - mempoolSlack` blocks apart, which is 1 block with these settings. Over a window of W blocks, at most 1 + (W − 1 + `mempoolSlack`) / `epochLength` posts can land, which is 145 per day at these settings.
+
+A **refresh fee** (context variable 1 = 1 on the authority input) lets the posting key pay a refresh's miner fee from the authority box. It is allowed only with the pool NFT at input 0, only one input at the authority script, at most 0.002 ERG lost, miner-fee outputs worth at least that loss, and a refresh-fee stamp (R8) at least `epochLength` above the last one. The post stamp is left alone, so the next post is not delayed. This makes the authority contract specific to one pool (compile constant `poolNftId`).
 
 The owner key can always rotate the posting key, refill the box, or reclaim it. A post can also carry its own top-up: an extra wallet input added to a post lands in the authority box with no owner key needed.
 
@@ -98,7 +102,7 @@ This comes from reading EIP-23 and oracle-core, not from a test against a deploy
 - A config option for the posting secret in place of the wallet mnemonic.
 - Tracking of the operator's authority box, with an alert when its ERG runs low or when posts stop landing.
 - Support for one oracle script per operator. oracle-core assumes a single oracle contract per pool today. How much this touches its scanning, bootstrap and update flows is an open question.
-- A refresh action for the keyless path: sign with the posting key, the one written into a collected oracle box's R7. Until the keyless refresh contract is live, refreshers keep an owner key online.
+- A refresh action for the keyless path: sign with the posting key, the one written into a collected oracle box's R7, and pay the miner fee from the operator's authority box through its refresh-fee branch (context variable 1 = 1, R8 stamp advanced). Until the keyless refresh contract is live, refreshers keep an owner key online.
 
 `mainnet-smoke/smoke.mjs` builds every one of these transactions for a test run. It is test tooling, not a daemon.
 
@@ -106,7 +110,7 @@ This comes from reading EIP-23 and oracle-core, not from a test against a deploy
 
 | Path | What it is |
 | :--- | :--- |
-| [`CompanionAuthorityHotKey.es`](CompanionAuthorityHotKey.es) | Authority contract, current version. Compile constant `epochLength` |
+| [`CompanionAuthorityHotKey.es`](CompanionAuthorityHotKey.es) | Authority contract, current version. Compile constants `epochLength`, `poolNftId` |
 | [`OracleContractV2-valuefix.es`](OracleContractV2-valuefix.es) | Modified oracle contract, current version. Compile constants `poolNftId`, `authorityNftId`, `authorityScriptHash` |
 | `*.pre-audit.es` | The exact versions that ran on mainnet on 2026-10-03, before the audit fixes |
 | [`reference/`](reference/) | Earlier designs the suites compare against: the hash-preimage authority contract and the first companion-path oracle contract |
@@ -115,6 +119,8 @@ This comes from reading EIP-23 and oracle-core, not from a test against a deploy
 | [`mainnet-smoke/smoke.mjs`](mainnet-smoke/smoke.mjs) | The CLI that ran the mainnet test. Dry run by default; `--check` and `--broadcast` are explicit |
 | `mainnet-smoke/state.json`, `mainnet-smoke/txs/` | Recorded state and signed transactions from the 2026-10-03 run (public keys and txids only) |
 | [`mainnet-smoke/smoke.offline.test.mjs`](mainnet-smoke/smoke.offline.test.mjs) | Offline test of the CLI against a mock node, including a secrets-leak check |
+| [`INVARIANTS.md`](INVARIANTS.md) | What a stolen posting key can and cannot do, with the test sections that pin each point and the setup rules they depend on |
+| [`artifacts/`](artifacts/) | Compiler of record (Fleet compiler 0.12.0) and the pinned template trees with their constant positions. `node artifacts/build-artifacts.mjs --check` recompiles and fails on any difference |
 
 ## Running the tests
 
@@ -122,7 +128,7 @@ Node 18+. Dependencies are pinned, because interpreter versions matter.
 
 ```bash
 npm ci
-node probe.test.mjs                      # 246/246
+node probe.test.mjs                      # 342/342
 node lift.test.mjs                       # 16/16
 node mainnet-smoke/smoke.offline.test.mjs   # 50/50
 ```
@@ -169,10 +175,10 @@ Rejected transactions never reached the chain, so they do not show on an explore
 
 ## Limits and open questions
 
-- **A stolen posting key is not harmless.** Until the owner rotates it, a stolen key can post wrong prices and burn up to the fee cap per post to miners, at most about 0.29 ERG/day. Because it shares the rate limit, it can also post first each window and lock out the honest daemon. The datapoint registers are not type-checked, so it can make the oracle box uncollectable, and the operator loses rewards until rotation. It cannot move ERG or tokens to an address of its choosing. Type-checking R5/R6 on the posting path is planned for the next contract round.
+- **A stolen posting key is not harmless.** Until the owner's recovery transaction, a stolen key can post wrong prices and burn capped fees to miners, at most about 0.58 ERG/day (posts and refresh fees together). Because it shares the rate limit, it can also post first each window and lock out the honest daemon. The datapoint registers are not type-checked, so it can make the oracle box uncollectable, and the operator loses rewards until rotation. It cannot move ERG or tokens to an address of its choosing, provided each posting key controls only one authority box ([`INVARIANTS.md`](INVARIANTS.md), setup rule 2). Type-checking R5/R6 on the posting path is planned for the next contract round.
 - **Fixed fee ceiling.** The miner fee per post cannot exceed 0.002 ERG, so a post cannot outbid a fee spike, and a post that is not mined within its window has to be rebuilt. Moving the cap into an owner-set register (below) would make it adjustable without a new contract.
 - **Fund sizing.** At 6-block pool epochs, honest posting costs about 0.12 ERG/day (120 posts at 0.001 ERG).
-- **Audit.** The contracts were audited with EKB, an AI-assisted two-pass contract audit: the first pass reviews the contract, and the second tries to break each finding with executable probes. All High and Medium findings from the first audit were fixed and re-tested. The re-audit found no High and **one Medium still open**: a stray authority NFT unit could let someone add one rate-limited poster until the owner seizes it. A setup rule covers it today: mint exactly one unit straight into the authority box. A tested contract fix is not applied yet, because it would burn the NFT on reclaim. The reports are not published.
+- **Audit.** The current authority contract (post and refresh-fee stamps, refresh-fee branch, 2026-10-05) has **not** been audited. The previous versions were audited with EKB, an AI-assisted two-pass contract audit: the first pass reviews the contract, and the second tries to break each finding with executable probes. All High and Medium findings from the first audit were fixed and re-tested. The re-audit found no High and **one Medium still open**: a stray authority NFT unit could let someone add one rate-limited poster until the owner seizes it. A setup rule covers it today: mint exactly one unit straight into the authority box. A tested contract fix is not applied yet, because it would burn the NFT on reclaim. The reports are not published.
 - **Token stranding.** The oracle contract pins the authority contract by script hash, so any change to the authority contract changes the oracle script. An oracle token can never leave its script, so tokens on the old script stay there. Options under discussion: move the lock, slack and fee cap into an authority-box register, and give the oracle contract an owner exit.
 - **One oracle token stays behind in the test.** The dummy oracle box keeps 0.01 ERG and its oracle token for good, because the oracle contract never lets that token leave its script.
 - **Lost top-ups.** Plain ERG sent to the authority address is unrecoverable (see the warning above). A future contract round could add an owner sweep for boxes without R4.
